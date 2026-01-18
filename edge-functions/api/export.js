@@ -3,13 +3,13 @@
  * GET /api/export
  */
 
-export async function onRequest({ request, env }) {
+export async function onRequest({ request }) {
   if (request.method !== 'GET') {
     return new Response('Method not allowed', { status: 405 })
   }
 
   try {
-    if (!env.lb_kv) {
+    if (typeof lb_kv === 'undefined') {
       return new Response(JSON.stringify({ 
         error: 'KV namespace not bound',
         message: 'Please bind KV namespace with variable name "lb_kv" in EdgeOne Pages settings'
@@ -19,7 +19,7 @@ export async function onRequest({ request, env }) {
       });
     }
 
-    const rulesData = await env.lb_kv.get('rules', { type: 'json' }) || {}
+    const rulesData = await lb_kv.get('rules', { type: 'json' }) || {}
 
     const code = `/**
  * EdgeOne Load Balancer - Standalone Edge Function

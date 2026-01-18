@@ -1,8 +1,8 @@
 // DELETE /api/rules/[domain]/targets/[index] - Delete a target from a rule
 
-export async function onRequestDelete({ params, env }) {
+export async function onRequestDelete({ params }) {
   try {
-    if (!env.lb_kv) {
+    if (typeof lb_kv === 'undefined') {
       return new Response(JSON.stringify({ 
         error: 'KV namespace not bound',
         message: 'Please bind KV namespace with variable name "lb_kv" in EdgeOne Pages settings'
@@ -25,7 +25,7 @@ export async function onRequestDelete({ params, env }) {
       });
     }
 
-    const rules = await env.lb_kv.get('rules', { type: 'json' }) || {};
+    const rules = await lb_kv.get('rules', { type: 'json' }) || {};
     
     if (!rules[domain]) {
       return new Response(JSON.stringify({ 
@@ -50,7 +50,7 @@ export async function onRequestDelete({ params, env }) {
     }
 
     rules[domain].targets.splice(index, 1);
-    await env.lb_kv.put('rules', JSON.stringify(rules));
+    await lb_kv.put('rules', JSON.stringify(rules));
 
     return new Response(JSON.stringify({ success: true }), {
       headers: { 'Content-Type': 'application/json' }

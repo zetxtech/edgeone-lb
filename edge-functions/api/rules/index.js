@@ -1,9 +1,9 @@
 // GET /api/rules - Get all rules
 // POST /api/rules - Create/update a rule
 
-export async function onRequestGet({ env }) {
+export async function onRequestGet() {
   try {
-    if (!env.lb_kv) {
+    if (typeof lb_kv === 'undefined') {
       return new Response(JSON.stringify({ 
         error: 'KV namespace not bound',
         message: 'Please bind KV namespace with variable name "lb_kv" in EdgeOne Pages settings'
@@ -13,7 +13,7 @@ export async function onRequestGet({ env }) {
       });
     }
     
-    const rules = await env.lb_kv.get('rules', { type: 'json' }) || {};
+    const rules = await lb_kv.get('rules', { type: 'json' }) || {};
     return new Response(JSON.stringify(rules), {
       headers: { 'Content-Type': 'application/json' }
     });
@@ -29,9 +29,9 @@ export async function onRequestGet({ env }) {
   }
 }
 
-export async function onRequestPost({ request, env }) {
+export async function onRequestPost({ request }) {
   try {
-    if (!env.lb_kv) {
+    if (typeof lb_kv === 'undefined') {
       return new Response(JSON.stringify({ 
         error: 'KV namespace not bound',
         message: 'Please bind KV namespace with variable name "lb_kv" in EdgeOne Pages settings'
@@ -53,9 +53,9 @@ export async function onRequestPost({ request, env }) {
       });
     }
 
-    const rules = await env.lb_kv.get('rules', { type: 'json' }) || {};
+    const rules = await lb_kv.get('rules', { type: 'json' }) || {};
     rules[body.domain] = body.rule;
-    await env.lb_kv.put('rules', JSON.stringify(rules));
+    await lb_kv.put('rules', JSON.stringify(rules));
 
     return new Response(JSON.stringify({ success: true }), {
       headers: { 'Content-Type': 'application/json' }

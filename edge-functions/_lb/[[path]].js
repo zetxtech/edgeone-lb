@@ -4,7 +4,7 @@
 // KV binding name (must be configured in EdgeOne Pages console)
 // lb_kv is injected by EdgeOne Pages runtime
 
-export async function onRequest({ request, params, env }) {
+export async function onRequest({ request, params }) {
   try {
     // Get original path from params (e.g., ['user', '1'] for /user/1)
     const pathSegments = params.path || [];
@@ -27,10 +27,23 @@ export async function onRequest({ request, params, env }) {
     // Get rules from KV
     let rules = {};
     try {
-      rules = await env.lb_kv.get('rules', { type: 'json' }) || {};
+      if (typeof lb_kv === 'undefined') {
+        return new Response(JSON.stringify({ 
+          error: 'KV namespace not bound',
+          message: 'Please bind KV namespace with variable name "lb_kv" in EdgeOne Pages settings'
+        }), {
+          status: 503,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      rules = await lb_kv.get('rules', { type: 'json' }) || {};
     } catch (error) {
       console.error('Failed to read KV:', error);
-      return new Response(JSON.stringify({ error: 'KV storage not configured' }), {
+      return new Response(JSON.stringify({ 
+        error: 'KV storage error',
+        message: error.message,
+        stack: error.stack
+      }), {
         status: 503,
         headers: { 'Content-Type': 'application/json' }
       });
