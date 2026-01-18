@@ -2,11 +2,24 @@
 
 export async function onRequestDelete({ params, env }) {
   try {
+    if (!env.lb_kv) {
+      return new Response(JSON.stringify({ 
+        error: 'KV namespace not bound',
+        message: 'Please bind KV namespace with variable name "lb_kv" in EdgeOne Pages settings'
+      }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
     const domain = decodeURIComponent(params.domain || '');
     const index = parseInt(params.index || '-1');
     
     if (!domain || index < 0) {
-      return new Response(JSON.stringify({ error: 'Missing required fields' }), {
+      return new Response(JSON.stringify({ 
+        error: 'Missing required fields',
+        received: { domain, index, params }
+      }), {
         status: 400,
         headers: { 'Content-Type': 'application/json' }
       });
@@ -15,14 +28,22 @@ export async function onRequestDelete({ params, env }) {
     const rules = await env.lb_kv.get('rules', { type: 'json' }) || {};
     
     if (!rules[domain]) {
-      return new Response(JSON.stringify({ error: 'Domain not found' }), {
+      return new Response(JSON.stringify({ 
+        error: 'Domain not found',
+        domain: domain,
+        availableDomains: Object.keys(rules)
+      }), {
         status: 404,
         headers: { 'Content-Type': 'application/json' }
       });
     }
 
     if (index >= rules[domain].targets.length) {
-      return new Response(JSON.stringify({ error: 'Target not found' }), {
+      return new Response(JSON.stringify({ 
+        error: 'Target not found',
+        index: index,
+        totalTargets: rules[domain].targets.length
+      }), {
         status: 404,
         headers: { 'Content-Type': 'application/json' }
       });
@@ -35,7 +56,11 @@ export async function onRequestDelete({ params, env }) {
       headers: { 'Content-Type': 'application/json' }
     });
   } catch (error) {
-    return new Response(JSON.stringify({ error: 'Failed to delete target' }), {
+    return new Response(JSON.stringify({ 
+      error: 'Failed to delete target',
+      message: error.message,
+      stack: error.stack
+    }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' }
     });

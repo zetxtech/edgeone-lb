@@ -9,6 +9,16 @@ export async function onRequest({ request, env }) {
   }
 
   try {
+    if (!env.lb_kv) {
+      return new Response(JSON.stringify({ 
+        error: 'KV namespace not bound',
+        message: 'Please bind KV namespace with variable name "lb_kv" in EdgeOne Pages settings'
+      }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
     const rulesData = await env.lb_kv.get('rules', { type: 'json' }) || {}
 
     const code = `/**
@@ -75,7 +85,11 @@ export async function onRequest({ request }) {
       }
     })
   } catch (error) {
-    return new Response(JSON.stringify({ error: error.message }), {
+    return new Response(JSON.stringify({ 
+      error: 'Failed to export',
+      message: error.message,
+      stack: error.stack
+    }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' }
     })
