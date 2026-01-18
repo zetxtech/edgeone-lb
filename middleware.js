@@ -1,9 +1,11 @@
 // EdgeOne Pages Middleware
 // Determines whether request goes to admin panel (Nuxt) or load balancer (Edge Function)
 
-// Admin panel hostname - requests to this host go to Nuxt
+// Admin panel hostnames - requests to these hosts go to Nuxt
 // All other hostnames are treated as proxied domains and go to load balancer
-const ADMIN_HOSTNAME = process.env.ADMIN_HOSTNAME || '';
+const ADMIN_HOSTNAMES = [
+  'elb.zetx.tech'
+];
 
 export function middleware(context) {
   const { request, next, rewrite } = context;
@@ -11,10 +13,9 @@ export function middleware(context) {
   const hostname = url.hostname;
 
   // Check if this is the admin panel
-  // If ADMIN_HOSTNAME is not set, use the default EdgeOne Pages domain (*.edgeone.run)
-  const isAdmin = ADMIN_HOSTNAME 
-    ? hostname === ADMIN_HOSTNAME 
-    : hostname.endsWith('.edgeone.run') || hostname.endsWith('.edgeone.site');
+  const isAdmin = ADMIN_HOSTNAMES.includes(hostname) ||
+                  hostname.endsWith('.edgeone.run') || 
+                  hostname.endsWith('.edgeone.site');
 
   if (isAdmin) {
     // Admin panel request -> pass through to Nuxt
