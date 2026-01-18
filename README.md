@@ -6,19 +6,19 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    EdgeOne Pages                             │
+│                    EdgeOne Pages                            │
 ├─────────────────────────────────────────────────────────────┤
-│  middleware.js                                               │
+│  middleware.js                                              │
 │  ├── admin.edgeone.run  ──────► next() ──────► Nuxt SSR     │
 │  └── other-domain.com   ──────► rewrite('/_lb/...') ────┐   │
-│                                                          │   │
-│  edge-functions/                                         │   │
-│  ├── _lb/[[path]].js  ◄──────────────────────────────────┘   │
-│  │   └── 读取 KV 规则，转发到后端                            │
-│  └── api/rules/                                              │
-│      └── CRUD API (管理端调用)                               │
-│                                                              │
-│  KV Storage (lb_kv)                                          │
+│                                                          │  │
+│  edge-functions/                                         │  │
+│  ├── _lb/[[path]].js  ◄──────────────────────────────────┘  │
+│  │   └── Read rule from KV and rewrite to backend           │
+│  └── api/rules/                                             │
+│      └── CRUD API                                           │
+│                                                             │
+│  KV Storage (lb_kv)                                         │
 │  └── rules: { "domain": { targets: [...], ... } }           │
 └─────────────────────────────────────────────────────────────┘
 ```
