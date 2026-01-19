@@ -47,26 +47,33 @@
       </div>
 
       <!-- Global Health Check Trigger -->
-      <div class="bg-slate-800/50 backdrop-blur-sm rounded-xl p-4 border border-slate-700/50 mb-6">
-        <div class="flex items-center justify-between flex-wrap gap-4">
-          <div class="flex items-center gap-2">
-            <svg class="w-5 h-5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
-            </svg>
-            <span class="text-sm font-medium text-slate-300">Global Health Check</span>
-          </div>
+      <div class="bg-slate-800/50 backdrop-blur-sm rounded-xl p-5 border border-slate-700/50 mb-6">
+        <div class="flex items-center gap-2 mb-3">
+          <svg class="w-5 h-5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+          </svg>
+          <span class="text-sm font-medium text-slate-300">Global Health Check Trigger</span>
+        </div>
+        <p class="text-xs text-slate-400 mb-3">
+          Trigger health checks for all backend targets across all domains. Visit this URL on any configured domain:
+        </p>
+        <div class="flex flex-wrap gap-2">
           <button 
-            @click="copyToClipboard('/_trigger_health_check')"
-            class="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-mono bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 transition-all cursor-pointer border border-amber-500/30"
-            title="Click to copy"
+            v-for="domain in Object.keys(rules)" 
+            :key="domain"
+            @click="copyToClipboard(`https://${domain}/_trigger_health_check`)"
+            class="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-mono bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 transition-all cursor-pointer border border-amber-500/30"
+            :title="`Copy: https://${domain}/_trigger_health_check`"
           >
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
             </svg>
-            /_trigger_health_check
+            https://{{ domain }}/_trigger_health_check
           </button>
         </div>
-        <p class="text-xs text-slate-500 mt-2">Append this path to any domain to trigger health probes for all targets across all configured domains.</p>
+        <div v-if="Object.keys(rules).length === 0" class="text-xs text-slate-500 italic">
+          No domains configured yet. Add a domain to see trigger URLs.
+        </div>
       </div>
 
       <!-- Add Domain Button -->
@@ -93,35 +100,38 @@
               <div class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></div>
               <div>
                 <h2 class="text-lg font-semibold text-white font-mono">{{ domain }}</h2>
-                <div class="flex items-center gap-3 mt-1">
+                <div class="flex items-center gap-3 mt-1 flex-wrap">
                   <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
                     <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z" />
                     </svg>
                     EdgeOne
                   </span>
-                  <span class="inline-flex items-center gap-1 text-xs text-slate-400">
+                  <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs bg-slate-700/50 text-slate-300 border border-slate-600/30" :title="rule.forceHttps ? 'HTTP requests will be redirected to HTTPS' : 'Both HTTP and HTTPS are allowed'">
                     <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
                     </svg>
                     {{ rule.forceHttps ? 'HTTPS Forced' : 'HTTPS Optional' }}
                   </span>
-                  <span class="inline-flex items-center gap-1 text-xs text-slate-400">
+                  <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs bg-slate-700/50 text-slate-300 border border-slate-600/30" :title="`Backend health check path: ${rule.healthPath}`">
                     <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
-                    Health: {{ rule.healthPath }}
+                    Backend Health: {{ rule.healthPath }}
                   </span>
+                </div>
+                <div class="mt-2">
                   <button 
                     @click="copyToClipboard(`https://${domain}/_health`)"
-                    class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-mono bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition-all cursor-pointer border border-emerald-500/30"
-                    title="Click to copy health check URL"
+                    class="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-mono bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 transition-all cursor-pointer border border-emerald-500/30"
+                    :title="`Copy: https://${domain}/_health`"
                   >
-                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
                     </svg>
-                    /_health
+                    https://{{ domain }}/_health
                   </button>
+                  <span class="ml-2 text-xs text-slate-500">Check health status of this domain's backends</span>
                 </div>
               </div>
             </div>
