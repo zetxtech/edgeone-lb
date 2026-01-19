@@ -218,9 +218,35 @@ async function probeTarget(target, request, originalUrl, isWebSocket, signal) {
     upstreamUrl.hostname = parts[0];
     if (parts[1]) upstreamUrl.port = parts[1];
 
+    const upstreamHeaders = new Headers(request.headers);
+    upstreamHeaders.set('Host', target.host);
+    
+    const realClientIP = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Real-IP');
+    const realCountry = request.headers.get('CF-IPCountry') || 'XX';
+    const cfRay = request.headers.get('CF-Ray');
+    
+    if (realClientIP) {
+      upstreamHeaders.set('LB-Connecting-IP', realClientIP);
+      upstreamHeaders.set('X-Real-IP', realClientIP);
+      
+      const existingXFF = request.headers.get('X-Forwarded-For');
+      if (existingXFF) {
+        upstreamHeaders.set('X-Forwarded-For', existingXFF);
+      } else {
+        upstreamHeaders.set('X-Forwarded-For', realClientIP);
+      }
+    }
+    
+    upstreamHeaders.set('X-Forwarded-Proto', originalUrl.protocol.replace(':', ''));
+    upstreamHeaders.set('LB-IPCountry', realCountry);
+    
+    if (cfRay) {
+      upstreamHeaders.set('LB-Ray', cfRay);
+    }
+
     const upstreamReq = new Request(upstreamUrl, {
       method: request.method,
-      headers: request.headers,
+      headers: upstreamHeaders,
       body: isWebSocket ? null : request.body,
       redirect: "manual",
       signal: signal

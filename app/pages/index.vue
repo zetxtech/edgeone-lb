@@ -55,25 +55,18 @@
           <span class="text-sm font-medium text-slate-300">Global Health Check Trigger</span>
         </div>
         <p class="text-xs text-slate-400 mb-3">
-          Trigger health checks for all backend targets across all domains. Visit this URL on any configured domain:
+          Trigger health checks for all backend targets across all domains. Visit this URL on the management interface:
         </p>
-        <div class="flex flex-wrap gap-2">
-          <button 
-            v-for="domain in Object.keys(rules)" 
-            :key="domain"
-            @click="copyToClipboard(`https://${domain}/_trigger_health_check`)"
-            class="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-mono bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 transition-all cursor-pointer border border-amber-500/30"
-            :title="`Copy: https://${domain}/_trigger_health_check`"
-          >
-            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-            </svg>
-            https://{{ domain }}/_trigger_health_check
-          </button>
-        </div>
-        <div v-if="Object.keys(rules).length === 0" class="text-xs text-slate-500 italic">
-          No domains configured yet. Add a domain to see trigger URLs.
-        </div>
+        <button 
+          @click="copyToClipboard(`${currentOrigin}/_trigger_health_check`)"
+          class="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-mono bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 transition-all cursor-pointer border border-amber-500/30"
+          :title="`Copy: ${currentOrigin}/_trigger_health_check`"
+        >
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+          </svg>
+          {{ currentOrigin }}/_trigger_health_check
+        </button>
       </div>
 
       <!-- Add Domain Button -->
@@ -95,65 +88,80 @@
           class="bg-slate-800/50 backdrop-blur-sm rounded-xl border border-slate-700/50 overflow-hidden hover:border-slate-600/50 transition-all duration-200"
         >
           <!-- Domain Header -->
-          <div class="px-6 py-4 border-b border-slate-700/50 flex items-center justify-between">
-            <div class="flex items-center gap-4">
-              <div class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></div>
-              <div>
-                <h2 class="text-lg font-semibold text-white font-mono">{{ domain }}</h2>
-                <div class="flex items-center gap-3 mt-1 flex-wrap">
-                  <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
-                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z" />
-                    </svg>
-                    EdgeOne
-                  </span>
-                  <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs bg-slate-700/50 text-slate-300 border border-slate-600/30" :title="rule.forceHttps ? 'HTTP requests will be redirected to HTTPS' : 'Both HTTP and HTTPS are allowed'">
-                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                    </svg>
-                    {{ rule.forceHttps ? 'HTTPS Forced' : 'HTTPS Optional' }}
-                  </span>
-                  <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs bg-slate-700/50 text-slate-300 border border-slate-600/30" :title="`Backend health check path: ${rule.healthPath}`">
-                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                    Backend Health: {{ rule.healthPath }}
-                  </span>
-                </div>
-                <div class="mt-2">
-                  <button 
-                    @click="copyToClipboard(`https://${domain}/_health`)"
-                    class="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-mono bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 transition-all cursor-pointer border border-emerald-500/30"
-                    :title="`Copy: https://${domain}/_health`"
-                  >
-                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                    </svg>
-                    https://{{ domain }}/_health
-                  </button>
-                  <span class="ml-2 text-xs text-slate-500">Check health status of this domain's backends</span>
+          <div class="px-6 py-4 border-b border-slate-700/50">
+            <div class="flex items-start justify-between">
+              <div class="flex items-start gap-3 flex-1">
+                <div class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse mt-1.5"></div>
+                <div class="flex-1 min-w-0">
+                  <h2 class="text-lg font-semibold text-white font-mono mb-3">{{ domain }}</h2>
+                  
+                  <!-- Tags Row -->
+                  <div class="flex items-center gap-2 mb-3 flex-wrap">
+                    <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z" />
+                      </svg>
+                      EdgeOne
+                    </span>
+                    <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium bg-slate-700/50 text-slate-300 border border-slate-600/30" :title="rule.forceHttps ? 'HTTP requests will be redirected to HTTPS' : 'Both HTTP and HTTPS are allowed'">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                      </svg>
+                      {{ rule.forceHttps ? 'HTTPS Forced' : 'HTTPS Optional' }}
+                    </span>
+                    <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium bg-slate-700/50 text-slate-300 border border-slate-600/30" :title="`Backend health check path: ${rule.healthPath}`">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      Backend Health: {{ rule.healthPath }}
+                    </span>
+                  </div>
+
+                  <!-- Health Check URL -->
+                  <div class="bg-slate-900/50 rounded-lg p-3 border border-slate-700/30">
+                    <div class="flex items-start gap-2">
+                      <svg class="w-4 h-4 text-emerald-400 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      <div class="flex-1 min-w-0">
+                        <div class="text-xs text-slate-400 mb-1.5">Health Check Endpoint</div>
+                        <button 
+                          @click="copyToClipboard(`https://${domain}/_health`)"
+                          class="inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-mono bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 transition-all cursor-pointer border border-emerald-500/30 group"
+                          :title="`Copy: https://${domain}/_health`"
+                        >
+                          <svg class="w-3.5 h-3.5 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                          </svg>
+                          https://{{ domain }}/_health
+                        </button>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
-            </div>
-            <div class="flex items-center gap-2">
-              <button 
-                @click="editDomain(domain)" 
-                class="p-2 text-slate-400 hover:text-white hover:bg-slate-700/50 rounded-lg transition-all"
-                title="Edit"
-              >
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                </svg>
-              </button>
-              <button 
-                @click="deleteDomain(domain)" 
-                class="p-2 text-slate-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-all"
-                title="Delete"
-              >
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                </svg>
-              </button>
+              
+              <!-- Action Buttons -->
+              <div class="flex items-center gap-2 ml-4">
+                <button 
+                  @click="editDomain(domain)" 
+                  class="p-2 text-slate-400 hover:text-white hover:bg-slate-700/50 rounded-lg transition-all"
+                  title="Edit"
+                >
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                  </svg>
+                </button>
+                <button 
+                  @click="deleteDomain(domain)" 
+                  class="p-2 text-slate-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-all"
+                  title="Delete"
+                >
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                </button>
+              </div>
             </div>
           </div>
 
@@ -354,6 +362,7 @@
 
 <script setup>
 const rules = ref({})
+const currentOrigin = ref('')
 
 const showAddDomain = ref(false)
 const showAddTarget = ref(false)
@@ -376,6 +385,9 @@ const totalTargets = computed(() => {
 })
 
 onMounted(async () => {
+  if (process.client) {
+    currentOrigin.value = window.location.origin
+  }
   await loadRules()
 })
 
