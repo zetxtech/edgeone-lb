@@ -90,6 +90,30 @@
                     Health: {{ rule.healthPath }}
                   </span>
                 </div>
+                <!-- Health Check URLs -->
+                <div class="flex items-center gap-2 mt-2 flex-wrap">
+                  <span class="text-xs text-slate-500">Polling URLs:</span>
+                  <button 
+                    @click="copyToClipboard(`https://${domain}/_health`)"
+                    class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-mono bg-slate-700/50 text-slate-300 hover:bg-slate-600/50 hover:text-white transition-all cursor-pointer border border-slate-600/30"
+                    title="Click to copy"
+                  >
+                    <svg class="w-3 h-3 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                    </svg>
+                    /_health
+                  </button>
+                  <button 
+                    @click="copyToClipboard(`https://${domain}/_trigger_health_check`)"
+                    class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-mono bg-slate-700/50 text-slate-300 hover:bg-slate-600/50 hover:text-white transition-all cursor-pointer border border-slate-600/30"
+                    title="Click to copy"
+                  >
+                    <svg class="w-3 h-3 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                    </svg>
+                    /_trigger_health_check
+                  </button>
+                </div>
               </div>
             </div>
             <div class="flex items-center gap-2">
@@ -438,6 +462,14 @@ function getTypeBadgeClass(type) {
     direct: 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
   }
   return classes[type] || 'bg-slate-500/20 text-slate-300 border border-slate-500/30'
+}
+
+async function copyToClipboard(text) {
+  try {
+    await navigator.clipboard.writeText(text)
+  } catch (e) {
+    console.error('Failed to copy:', e)
+  }
 }
 
 async function exportConfig() {
