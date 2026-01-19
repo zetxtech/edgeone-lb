@@ -344,6 +344,132 @@ export async function middleware(context) {
                   hostname.endsWith('.edgeone.site');
 
   if (isAdmin) {
+    // Handle special endpoints for admin panel
+    if (url.pathname === '/_trigger_health_check' || url.pathname === '/_health') {
+      try {
+        if (typeof lb_kv === 'undefined') {
+          return new Response(JSON.stringify({ 
+            error: 'KV namespace not bound',
+            message: 'Please bind KV namespace with variable name "lb_kv" in EdgeOne Pages settings'
+          }), {
+            status: 503,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+
+        const rules = await lb_kv.get('rules', { type: 'json' }) || {};
+        const allTargets = [];
+        const domainTargets = {};
+
+        // Collect all targets from all domains
+        for (const [domain, rule] of Object.entries(rules)) {
+          if (rule.targets && rule.targets.length > 0) {
+            domainTargets[domain] = rule.targets;
+            allTargets.push(...rule.targets.map(t => ({ ...t, domain })));
+          }
+        }
+
+        if (allTargets.length === 0) {
+          return new Response(JSON.stringify({ 
+            message: 'No targets configured in any domain',
+            domains: Object.keys(rules)
+          }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+
+        const cache = await caches.open('cache-host-metrics');
+
+        // Handle /_trigger_health_check
+        if (url.pathname === '/_trigger_health_check') {
+          // Run health check for all domains
+          for (const [domain, rule] of Object.entries(rules)) {
+            if (rule.targets && rule.targets.length > 0) {
+              const healthPath = rule.healthPath || '/';
+              const candidates = rule.targets.map(t => ({ target: t }));
+              await runBackgroundHealthCheck(candidates, healthPath, cache);
+            }
+          }
+
+          // Return status report grouped by domain
+          const statusReport = {};
+          for (const [domain, targets] of Object.entries(domainTargets)) {
+            statusReport[domain] = {};
+            await Promise.all(targets.map(async (t) => {
+              const key = new Request(`https://${t.host}/_metric`);
+              const resp = await cache.match(key);
+              
+              let info = { status: 'pending', latency: null, lastChecked: null, reason: null };
+              if (resp) {
+                try { info = await resp.json(); } catch {}
+              }
+
+              statusReport[domain][t.host] = {
+                type: t.type,
+                status: info.status,
+                latency: info.latency === 9999 ? 'TimeOut' : `${info.latency}ms`,
+                last_update: info.lastChecked 
+                  ? new Date(info.lastChecked).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) 
+                  : 'Never',
+                reason: info.reason || 'OK'
+              };
+            }));
+          }
+
+          return new Response(JSON.stringify(statusReport, null, 2), {
+            headers: { 
+              'Content-Type': 'application/json; charset=utf-8',
+              'Access-Control-Allow-Origin': '*'
+            }
+          });
+        }
+
+        // Handle /_health
+        if (url.pathname === '/_health') {
+          const statusReport = {};
+          for (const [domain, targets] of Object.entries(domainTargets)) {
+            statusReport[domain] = {};
+            await Promise.all(targets.map(async (t) => {
+              const key = new Request(`https://${t.host}/_metric`);
+              const resp = await cache.match(key);
+              
+              let info = { status: 'pending', latency: null, lastChecked: null };
+              if (resp) {
+                try { info = await resp.json(); } catch {}
+              }
+
+              statusReport[domain][t.host] = {
+                type: t.type,
+                status: info.status,
+                latency: info.latency === 9999 ? 'TimeOut' : `${info.latency}ms`,
+                last_update: info.lastChecked 
+                  ? new Date(info.lastChecked).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) 
+                  : 'Never',
+                reason: info.reason || 'OK'
+              };
+            }));
+          }
+
+          return new Response(JSON.stringify(statusReport, null, 2), {
+            headers: { 
+              'Content-Type': 'application/json; charset=utf-8',
+              'Access-Control-Allow-Origin': '*'
+            }
+          });
+        }
+      } catch (error) {
+        console.error('Health check error:', error);
+        return new Response(JSON.stringify({ 
+          error: 'Internal server error', 
+          message: error.message 
+        }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
     // Admin panel request -> pass through to Nuxt
     return next();
   }
@@ -393,7 +519,7 @@ export async function middleware(context) {
       return Response.redirect(url.toString(), 302);
     }
 
-    // Health check endpoint - return backend status (same format as worker.js)
+    // Health report endpoint - return backend status (same format as worker.js)
     if (url.pathname === '/_health') {
       const cache = await caches.open('cache-host-metrics');
       const statusReport = {};

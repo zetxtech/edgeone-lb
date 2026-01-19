@@ -117,14 +117,14 @@
                     </span>
                   </div>
 
-                  <!-- Health Check URL -->
+                  <!-- Health Report URL -->
                   <div class="bg-slate-900/50 rounded-lg p-3 border border-slate-700/30">
                     <div class="flex items-start gap-2">
                       <svg class="w-4 h-4 text-emerald-400 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                       </svg>
                       <div class="flex-1 min-w-0">
-                        <div class="text-xs text-slate-400 mb-1.5">Health Check Endpoint</div>
+                        <div class="text-xs text-slate-400 mb-1.5">Health Report Endpoint</div>
                         <button 
                           @click="copyToClipboard(`https://${domain}/_health`)"
                           class="inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-mono bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 transition-all cursor-pointer border border-emerald-500/30 group"

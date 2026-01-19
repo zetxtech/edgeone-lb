@@ -64,7 +64,7 @@ export async function middleware(context) {
     return Response.redirect(url.toString(), 302);
   }
 
-  // Health check endpoint - return backend status (same format as worker.js)
+  // Health report endpoint - return backend status (same format as worker.js)
   if (url.pathname === '/_health') {
     const cache = await caches.open('cache-host-metrics');
     const statusReport = {};
