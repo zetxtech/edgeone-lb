@@ -96,8 +96,176 @@ edgeone pages dev
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/api/rules` | 获取所有规则 |
-| POST | `/api/rules` | 创建/更新域名规则 |
+| POST | `/api/rules` | 创建/更新域名规则（支持域名重命名） |
 | DELETE | `/api/rules/:domain` | 删除域名 |
+| POST | `/api/rules/:domain/targets` | 添加后端目标 |
+| DELETE | `/api/rules/:domain/targets/:index` | 删除后端目标 |
+| GET | `/api/export` | 导出独立的 middleware.js 配置 |
+
+### 创建/更新域名规则
+
+```json
+POST /api/rules
+{
+  "domain": "api.example.com",
+  "oldDomain": "old.example.com",  // 可选，用于域名重命名
+  "rule": {
+    "forceHttps": true,
+    "healthPath": "/",
+    "platform": "edgeone",  // 平台标识
+    "targets": [
+      { "host": "backend1.example.com", "type": "frp" },
+      { "host": "backend2.example.com", "type": "tunnel" }
+    ]
+  }
+}
+```
+
+## 功能特性
+
+### ✅ 域名管理
+- **可编辑域名**：支持修改域名名称，系统会自动处理重命名逻辑
+- **强制 HTTPS**：可配置是否强制 302 重定向到 HTTPS
+- **Health Check 路径**：配置健康检查路径（默认 `/`）
+- **平台标识**：所有配置自动标记为 `edgeone` 平台
+
+### ✅ 后端目标管理
+- 支持三种后端类型：
+  - `frp`：FRP 代理
+  - `tunnel`：Cloudflare Tunnel
+  - `direct`：直连
+- 动态添加/删除后端目标
+- 简单轮询负载均衡
+
+### ✅ 健康检查端点
+访问 `https://your-domain.com/_health` 可查看当前配置状态：
+
+```json
+{
+  "backend1.example.com": {
+    "type": "frp",
+    "status": "configured",
+    "latency": "N/A",
+    "last_update": "EdgeOne uses simple round-robin (no active health checks)",
+    "reason": "OK"
+  },
+  "_metadata": {
+    "domain": "api.example.com",
+    "platform": "edgeone",
+    "healthPath": "/",
+    "forceHttps": true,
+    "loadBalancingStrategy": "round-robin"
+  }
+}
+```
+
+### ✅ 触发健康检查端点 🆕
+访问 `https://your-domain.com/_trigger_health_check` 可主动触发对所有后端的健康检查：
+
+```json
+{
+  "domain": "api.example.com",
+  "platform": "edgeone",
+  "healthPath": "/",
+  "checkTime": "2026-01-19 18:30:00",
+  "totalTargets": 3,
+  "results": [
+    {
+      "host": "backend1.example.com",
+      "type": "frp",
+      "status": "healthy",
+      "statusCode": 200,
+      "latency": "45ms",
+      "timestamp": "2026-01-19 18:30:00"
+    },
+    {
+      "host": "backend2.example.com",
+      "type": "tunnel",
+      "status": "unhealthy",
+      "statusCode": 502,
+      "latency": "120ms",
+      "timestamp": "2026-01-19 18:30:00"
+    },
+    {
+      "host": "backend3.example.com",
+      "type": "direct",
+      "status": "unhealthy",
+      "statusCode": null,
+      "latency": "TimeOut",
+      "error": "Connection timeout",
+      "timestamp": "2026-01-19 18:30:00"
+    }
+  ]
+}
+```
+
+**用途：**
+- 配合外部监控服务（UptimeRobot、Pingdom、监控宝等）定时触发
+- 主动探测所有后端的健康状态
+- 获取实时的延迟和状态码信息
+- 用于告警和监控集成
+
+### ✅ 配置导出
+点击 "Export Config" 按钮可导出包含所有规则的独立 `middleware.js` 文件，可部署到其他 EdgeOne Pages 项目。
+
+## 与原 Worker 版本的区别
+
+| 特性 | Worker 版本 (worker.js) | EdgeOne 版本 (middleware.js) |
+|------|------------------------|------------------------------|
+| 配置方式 | 硬编码在代码中 | 存储在 KV，可通过管理面板修改 |
+| 域名管理 | 需要修改代码 | 可在线编辑，支持重命名 |
+| Health Check | 支持后台定时检查 + 缓存 | `/_health` 查看配置 + `/_trigger_health_check` 主动探测 |
+| 健康检查触发 | Cron Trigger (scheduled) | HTTP 触发（外部监控服务） |
+| 平台标识 | 无 | 自动标记 `platform: "edgeone"` |
+| 负载均衡 | 串行故障转移 + 健康度排序 | 简单轮询 |
+| 部署方式 | Cloudflare Workers | EdgeOne Pages |
+
+## 监控集成示例
+
+### 使用 UptimeRobot
+1. 创建新的 HTTP(s) 监控
+2. URL: `https://your-domain.com/_trigger_health_check`
+3. 监控间隔: 5 分钟
+4. 关键字监控: `"platform": "edgeone"`（确保返回正确）
+
+### 使用 Pingdom
+1. 添加 Uptime Check
+2. URL: `https://your-domain.com/_trigger_health_check`
+3. Check interval: 5 minutes
+4. Response validation: Contains `"platform"`
+
+### 使用 cURL + Cron
+```bash
+# 添加到 crontab
+*/5 * * * * curl -s https://your-domain.com/_trigger_health_check > /dev/null
+```
+
+### 使用 GitHub Actions
+```yaml
+name: Health Check
+on:
+  schedule:
+    - cron: '*/5 * * * *'  # 每 5 分钟
+  workflow_dispatch:
+
+jobs:
+  health-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Health Check
+        run: |
+          curl -s https://your-domain.com/_trigger_health_check | jq .
+```
+
+## 注意事项
+
+1. **域名重命名**：编辑域名时修改域名名称会删除旧域名并创建新域名，所有后端目标会自动迁移
+2. **Health Check**：`healthPath` 配置会在 `/_health` 端点中显示，但实际健康检查需要在后端实现
+3. **平台标识**：所有通过管理面板创建的配置都会自动添加 `platform: "edgeone"` 标识
+4. **响应头**：所有代理请求会添加以下响应头：
+   - `X-LB-Backend`: 实际处理请求的后端地址
+   - `X-LB-Powered-By`: EdgeOne-LB
+   - `X-LB-Platform`: edgeone
 | POST | `/api/rules/:domain/targets` | 添加后端目标 |
 | DELETE | `/api/rules/:domain/targets/:index` | 删除后端目标 |
 | GET | `/api/export` | 导出独立 Edge Function |

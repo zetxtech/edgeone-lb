@@ -71,6 +71,12 @@
               <div>
                 <h2 class="text-lg font-semibold text-white font-mono">{{ domain }}</h2>
                 <div class="flex items-center gap-3 mt-1">
+                  <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z" />
+                    </svg>
+                    EdgeOne
+                  </span>
                   <span class="inline-flex items-center gap-1 text-xs text-slate-400">
                     <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
@@ -178,8 +184,10 @@
                   type="text" 
                   class="w-full px-4 py-3 bg-slate-900/50 border border-slate-600/50 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-transparent transition-all"
                   placeholder="api.example.com"
-                  :disabled="!!editingDomain"
                 />
+                <p v-if="editingDomain" class="mt-1 text-xs text-amber-400">
+                  ⚠️ Changing domain will create a new entry and remove the old one
+                </p>
               </div>
               <div>
                 <label class="block text-sm font-medium text-slate-300 mb-2">Health Check Path</label>
@@ -189,6 +197,9 @@
                   class="w-full px-4 py-3 bg-slate-900/50 border border-slate-600/50 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-transparent transition-all"
                   placeholder="/"
                 />
+                <p class="mt-1 text-xs text-slate-500">
+                  Path used for backend health checks (e.g., /, /health, /api/status)
+                </p>
               </div>
               <label class="flex items-center gap-3 cursor-pointer group">
                 <div class="relative">
@@ -341,14 +352,18 @@ async function saveDomain() {
   if (!domainForm.value.domain) return
   
   try {
+    const isRename = editingDomain.value && editingDomain.value !== domainForm.value.domain
+    
     await $fetch('/api/rules', {
       method: 'POST',
       body: {
         domain: domainForm.value.domain,
+        oldDomain: isRename ? editingDomain.value : undefined,
         rule: {
           forceHttps: domainForm.value.forceHttps,
           healthPath: domainForm.value.healthPath,
-          targets: editingDomain.value ? rules.value[editingDomain.value].targets : []
+          targets: editingDomain.value ? rules.value[editingDomain.value].targets : [],
+          platform: 'edgeone' // Mark as EdgeOne configuration
         }
       }
     })
@@ -356,6 +371,7 @@ async function saveDomain() {
     closeAddDomain()
   } catch (e) {
     console.error('Failed to save domain:', e)
+    alert('Failed to save domain: ' + e.message)
   }
 }
 

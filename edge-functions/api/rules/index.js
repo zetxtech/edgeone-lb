@@ -54,7 +54,20 @@ export async function onRequestPost({ request }) {
     }
 
     const rules = await lb_kv.get('rules', { type: 'json' }) || {};
-    rules[body.domain] = body.rule;
+    
+    // Handle domain rename: delete old domain if it's different
+    if (body.oldDomain && body.oldDomain !== body.domain) {
+      delete rules[body.oldDomain];
+    }
+    
+    // Ensure rule has platform marker and health check path
+    const ruleData = {
+      ...body.rule,
+      platform: body.rule.platform || 'edgeone',
+      healthPath: body.rule.healthPath || '/'
+    };
+    
+    rules[body.domain] = ruleData;
     await lb_kv.put('rules', JSON.stringify(rules));
 
     return new Response(JSON.stringify({ success: true }), {

@@ -61,6 +61,109 @@ export async function middleware(context) {
       });
     }
 
+    // Force HTTPS redirect if configured
+    if (rule.forceHttps && url.protocol === 'http:') {
+      url.protocol = 'https:';
+      return Response.redirect(url.toString(), 302);
+    }
+
+    // Health check endpoint - return backend status (similar to worker.js)
+    if (url.pathname === '/_health') {
+      const statusReport = {};
+      
+      // Format similar to worker.js for consistency
+      rule.targets.forEach(t => {
+        statusReport[t.host] = {
+          type: t.type,
+          status: 'configured',
+          latency: 'N/A',
+          last_update: 'EdgeOne uses simple round-robin (no active health checks)',
+          reason: 'OK'
+        };
+      });
+
+      // Add metadata
+      statusReport['_metadata'] = {
+        domain: hostname,
+        platform: rule.platform || 'edgeone',
+        healthPath: rule.healthPath || '/',
+        forceHttps: rule.forceHttps || false,
+        loadBalancingStrategy: 'round-robin',
+        note: 'EdgeOne version uses simple round-robin without active health monitoring'
+      };
+
+      return new Response(JSON.stringify(statusReport, null, 2), {
+        headers: { 
+          'Content-Type': 'application/json; charset=utf-8',
+          'Access-Control-Allow-Origin': '*'
+        }
+      });
+    }
+
+    // Trigger health check endpoint - actively probe all backends
+    if (url.pathname === '/_trigger_health_check') {
+      const healthPath = rule.healthPath || '/';
+      
+      // Actively probe all backends
+      const checkPromises = rule.targets.map(async (target) => {
+        const start = Date.now();
+        try {
+          const checkUrl = new URL(`https://${target.host}${healthPath}`);
+          if (target.host.includes(":")) {
+            const parts = target.host.split(":");
+            checkUrl.hostname = parts[0];
+            checkUrl.port = parts[1];
+          }
+
+          const checkReq = new Request(checkUrl, {
+            method: "GET",
+            headers: { "User-Agent": "EdgeOne-LB-Health-Monitor" },
+            signal: AbortSignal.timeout(5000)
+          });
+
+          const resp = await fetch(checkReq);
+          const duration = Date.now() - start;
+
+          return {
+            host: target.host,
+            type: target.type,
+            status: resp.ok ? 'healthy' : 'unhealthy',
+            statusCode: resp.status,
+            latency: `${duration}ms`,
+            timestamp: new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
+          };
+        } catch (e) {
+          const duration = Date.now() - start;
+          return {
+            host: target.host,
+            type: target.type,
+            status: 'unhealthy',
+            statusCode: null,
+            latency: duration >= 5000 ? 'TimeOut' : `${duration}ms`,
+            error: e.message,
+            timestamp: new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
+          };
+        }
+      });
+
+      const results = await Promise.allSettled(checkPromises);
+      const healthReport = {
+        domain: hostname,
+        platform: rule.platform || 'edgeone',
+        healthPath: healthPath,
+        checkTime: new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }),
+        totalTargets: rule.targets.length,
+        results: results.map(r => r.status === 'fulfilled' ? r.value : { error: r.reason?.message || 'Unknown error' })
+      };
+
+      return new Response(JSON.stringify(healthReport, null, 2), {
+        headers: { 
+          'Content-Type': 'application/json; charset=utf-8',
+          'Access-Control-Allow-Origin': '*'
+        }
+      });
+    }
+
     // Get available targets
     const targets = rule.targets || [];
     if (targets.length === 0) {
@@ -110,6 +213,7 @@ export async function middleware(context) {
     const responseHeaders = new Headers(response.headers);
     responseHeaders.set('X-LB-Backend', target.host);
     responseHeaders.set('X-LB-Powered-By', 'EdgeOne-LB');
+    responseHeaders.set('X-LB-Platform', rule.platform || 'edgeone');
 
     return new Response(response.body, {
       status: response.status,
