@@ -55,7 +55,7 @@
           <span class="text-sm font-medium text-slate-300">Global Health Check Trigger</span>
         </div>
         <p class="text-xs text-slate-400 mb-3">
-          Trigger health checks for all backend targets across all domains. Visit this URL on the management interface:
+          Trigger health checks for all backend targets across all domains. Please monitor this URL on UptimeRobot / Betterstack.
         </p>
         <button 
           @click="copyToClipboard(`${currentOrigin}/_trigger_health_check`)"
