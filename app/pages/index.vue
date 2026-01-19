@@ -185,9 +185,6 @@
                   class="w-full px-4 py-3 bg-slate-900/50 border border-slate-600/50 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-transparent transition-all"
                   placeholder="api.example.com"
                 />
-                <p v-if="editingDomain" class="mt-1 text-xs text-amber-400">
-                  ⚠️ Changing domain will create a new entry and remove the old one
-                </p>
               </div>
               <div>
                 <label class="block text-sm font-medium text-slate-300 mb-2">Health Check Path</label>

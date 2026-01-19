@@ -69,7 +69,7 @@ export async function middleware(context) {
 
     // Health check endpoint - return backend status (same format as worker.js)
     if (url.pathname === '/_health') {
-      const cache = await caches.open('cache:host-metrics');
+      const cache = await caches.open('cache-host-metrics');
       const statusReport = {};
       
       await Promise.all(rule.targets.map(async (t) => {
@@ -154,7 +154,7 @@ export async function middleware(context) {
       const healthResults = results.map(r => r.status === 'fulfilled' ? r.value : { error: r.reason?.message || 'Unknown error' });
       
       // Cache health check results using Cache API (TTL: 10 minutes)
-      const cache = await caches.open('cache:host-metrics');
+      const cache = await caches.open('cache-host-metrics');
       const statusReport = {};
       
       for (const result of healthResults) {
@@ -213,6 +213,7 @@ export async function middleware(context) {
 
     // Build proxy headers
     const proxyHeaders = new Headers(request.headers);
+    proxyHeaders.set('Host', target.host);
     proxyHeaders.set('X-Forwarded-Host', hostname);
     proxyHeaders.set('X-Forwarded-Proto', url.protocol.replace(':', ''));
     proxyHeaders.set('X-Real-IP', request.headers.get('cf-connecting-ip') || 

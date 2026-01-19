@@ -35,7 +35,7 @@ export default {
       return Response.redirect(url.toString(), 302);
     }
 
-    const cache = await caches.open("cache:host-metrics");
+    const cache = await caches.open("cache-host-metrics");
 
     // Debugging Interface
     if (url.pathname === "/_health") {
@@ -83,7 +83,7 @@ export default {
    * Performs periodic background health checks to maintain cache freshness.
    */
   async scheduled(event, env, ctx) {
-    const cache = await caches.open("cache:host-metrics");
+    const cache = await caches.open("cache-host-metrics");
     
     // Iterate over all configured services
     const maintenanceTasks = Object.values(LOAD_BALANCING_RULES).map(async (rule) => {
