@@ -9,6 +9,19 @@ const ADMIN_HOSTNAMES = [
 ];
 
 // =================================================================
+// Utility: Create AbortSignal with timeout (compatibility wrapper)
+// =================================================================
+function createTimeoutSignal(timeoutMs) {
+  if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+    return AbortSignal.timeout(timeoutMs);
+  }
+  
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), timeoutMs);
+  return controller.signal;
+}
+
+// =================================================================
 // Response Validator (ported from worker.js)
 // Detects proxy error signatures (FRP/Tunnel) vs legitimate responses.
 // =================================================================
@@ -267,7 +280,7 @@ async function runBackgroundHealthCheck(candidatesWithStats, healthPath, cache) 
       const req = new Request(checkUrl, {
         method: "GET",
         headers: { "User-Agent": "EdgeOne-LB-Health-Monitor" },
-        signal: AbortSignal.timeout(HEALTH_CHECK_TIMEOUT)
+        signal: createTimeoutSignal(HEALTH_CHECK_TIMEOUT)
       });
 
       const resp = await fetch(req);
@@ -454,7 +467,7 @@ export async function middleware(context) {
       const timeout = item.status === 'unhealthy' ? FAST_FAIL_TIMEOUT : REQUEST_TIMEOUT;
       
       try {
-        const result = await probeTarget(item.target, request.clone(), url, isWebSocket, AbortSignal.timeout(timeout));
+        const result = await probeTarget(item.target, request.clone(), url, isWebSocket, createTimeoutSignal(timeout));
         const duration = Date.now() - start;
         
         if (result && result.ok) {

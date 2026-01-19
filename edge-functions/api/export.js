@@ -31,6 +31,17 @@ export async function onRequest({ request }) {
 
 const RULES = ${JSON.stringify(rulesData, null, 2)};
 
+// Utility: Create AbortSignal with timeout (compatibility wrapper)
+function createTimeoutSignal(timeoutMs) {
+  if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+    return AbortSignal.timeout(timeoutMs);
+  }
+  
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), timeoutMs);
+  return controller.signal;
+}
+
 export async function middleware(context) {
   const { request } = context;
   const url = new URL(request.url);
@@ -104,7 +115,7 @@ export async function middleware(context) {
         const checkReq = new Request(checkUrl, {
           method: "GET",
           headers: { "User-Agent": "EdgeOne-LB-Health-Monitor" },
-          signal: AbortSignal.timeout(5000)
+          signal: createTimeoutSignal(5000)
         });
 
         const resp = await fetch(checkReq);
