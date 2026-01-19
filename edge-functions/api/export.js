@@ -1,5 +1,5 @@
 /**
- * Export API - Generate standalone Edge Function code with embedded rules
+ * Export API - Generate standalone Middleware code with embedded rules
  * GET /api/export
  */
 
@@ -22,21 +22,28 @@ export async function onRequest({ request }) {
     const rulesData = await lb_kv.get('rules', { type: 'json' }) || {}
 
     const code = `/**
- * EdgeOne Load Balancer - Standalone Edge Function
+ * EdgeOne Load Balancer - Standalone Middleware
  * Generated at: ${new Date().toISOString()}
  * 
- * Deploy this file to EdgeOne Edge Functions for load balancing without admin panel.
+ * Deploy this file as middleware.js to EdgeOne Pages for load balancing without admin panel.
  */
 
 const RULES = ${JSON.stringify(rulesData, null, 2)};
 
-export async function onRequest({ request }) {
+export async function middleware(context) {
+  const { request } = context;
   const url = new URL(request.url);
   const hostname = url.hostname;
   
   const rule = RULES[hostname];
   if (!rule || !rule.targets || rule.targets.length === 0) {
-    return new Response('No backend configured for this domain', { status: 502 });
+    return new Response(JSON.stringify({ 
+      error: 'No backend configured for this domain',
+      hostname: hostname
+    }), { 
+      status: 502,
+      headers: { 'Content-Type': 'application/json' }
+    });
   }
 
   // Force HTTPS redirect
@@ -45,43 +52,73 @@ export async function onRequest({ request }) {
     return Response.redirect(url.toString(), 301);
   }
 
-  // Simple round-robin selection (random for stateless)
-  const target = rule.targets[Math.floor(Math.random() * rule.targets.length)];
+  // Simple round-robin selection based on timestamp
+  const targetIndex = Date.now() % rule.targets.length;
+  const target = rule.targets[targetIndex];
   
   // Build backend URL
-  const [host, port] = target.host.includes(':') 
-    ? target.host.split(':') 
-    : [target.host, '443'];
-  
-  const backendUrl = new URL(request.url);
-  backendUrl.hostname = host;
-  backendUrl.port = port;
-  backendUrl.protocol = 'https:';
+  const protocol = target.type === 'https' ? 'https' : 'http';
+  const port = target.port ? \\\`:$\{target.port}\\\` : '';
+  const backendUrl = \\\`$\{protocol}://$\{target.host}$\{port}$\{url.pathname}$\{url.search}\\\`;
 
-  // Forward request to backend
-  const backendRequest = new Request(backendUrl.toString(), {
+  // Build proxy headers
+  const proxyHeaders = new Headers(request.headers);
+  proxyHeaders.set('X-Forwarded-Host', hostname);
+  proxyHeaders.set('X-Forwarded-Proto', url.protocol.replace(':', ''));
+  proxyHeaders.set('X-Real-IP', request.headers.get('cf-connecting-ip') || 
+                                request.headers.get('x-forwarded-for')?.split(',')[0] || 
+                                'unknown');
+
+  // Create proxy request
+  const proxyRequest = new Request(backendUrl, {
     method: request.method,
-    headers: request.headers,
+    headers: proxyHeaders,
     body: request.body,
     redirect: 'manual'
   });
 
-  // Set original host header for backends that need it
-  backendRequest.headers.set('X-Forwarded-Host', hostname);
-  backendRequest.headers.set('X-Forwarded-Proto', url.protocol.replace(':', ''));
-
   try {
-    return await fetch(backendRequest);
+    // Fetch from backend
+    const response = await fetch(proxyRequest, {
+      eo: {
+        timeoutSetting: {
+          connectTimeout: 10000,
+          readTimeout: 30000,
+          writeTimeout: 30000
+        }
+      }
+    });
+
+    // Build response with custom headers
+    const responseHeaders = new Headers(response.headers);
+    responseHeaders.set('X-LB-Backend', target.host);
+    responseHeaders.set('X-LB-Powered-By', 'EdgeOne-LB');
+
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: responseHeaders
+    });
   } catch (error) {
-    return new Response('Backend unavailable: ' + error.message, { status: 502 });
+    return new Response(JSON.stringify({ 
+      error: 'Backend unavailable',
+      message: error.message
+    }), { 
+      status: 502,
+      headers: { 'Content-Type': 'application/json' }
+    });
   }
 }
+
+export const config = {
+  matcher: '/:path*'
+};
 `
 
     return new Response(code, {
       headers: {
         'Content-Type': 'application/javascript',
-        'Content-Disposition': 'attachment; filename="edgeone-function.js"'
+        'Content-Disposition': 'attachment; filename="middleware.js"'
       }
     })
   } catch (error) {

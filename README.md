@@ -8,28 +8,32 @@
 ┌─────────────────────────────────────────────────────────────┐
 │                    EdgeOne Pages                            │
 ├─────────────────────────────────────────────────────────────┤
-│  middleware.js                                              │
+│  middleware.js (Runs on Edge Nodes)                         │
 │  ├── admin.edgeone.run  ──────► next() ──────► Nuxt SSR     │
-│  └── other-domain.com   ──────► rewrite('/_lb/...') ────┐   │
-│                                                          │  │
-│  edge-functions/                                         │  │
-│  ├── _lb/[[path]].js  ◄──────────────────────────────────┘  │
-│  │   └── Read rule from KV and rewrite to backend           │
-│  └── api/rules/                                             │
-│      └── CRUD API                                           │
+│  └── other-domain.com   ──────► Load Balancer Logic         │
+│      └── Read rules from KV → Select backend → Proxy        │
+│                                                             │
+│  edge-functions/api/                                        │
+│  └── rules/                                                 │
+│      └── CRUD API for managing rules                        │
 │                                                             │
 │  KV Storage (lb_kv)                                         │
 │  └── rules: { "domain": { targets: [...], ... } }           │
 └─────────────────────────────────────────────────────────────┘
 ```
 
+**架构说明：**
+
+- **Middleware 直接处理负载均衡**：所有代理域名的请求在 middleware 中直接读取 KV 规则并转发到后端，无需经过 Nuxt 或 Edge Functions
+- **管理面板使用 Nuxt**：管理域名（如 `*.edgeone.run`）的请求通过 `next()` 传递给 Nuxt 进行 SSR 渲染
+- **API 使用 Edge Functions**：规则管理 API 使用 Edge Functions 实现，提供 RESTful 接口
+
 ## 目录结构
 
 ```
-admin/
-├── middleware.js              # 请求路由中间件
+edgeone-lb/
+├── middleware.js              # 请求路由和负载均衡中间件
 ├── edge-functions/
-│   ├── _lb/[[path]].js       # 负载均衡 Edge Function
 │   └── api/
 │       ├── export.js         # 导出独立配置
 │       └── rules/            # 规则管理 API
@@ -41,6 +45,8 @@ admin/
 ├── nuxt.config.ts
 └── package.json
 ```
+
+**注意：** `edge-functions/_lb/` 目录已移除，负载均衡逻辑现在直接在 `middleware.js` 中实现。
 
 ## 部署步骤
 
@@ -119,7 +125,7 @@ edgeone pages dev
 
 ## 导出功能
 
-管理面板支持导出独立的 Edge Function 代码，包含当前所有规则配置。导出的代码可以直接部署到其他 EdgeOne 项目，无需管理面板和 KV 存储。
+管理面板支持导出独立的 Middleware 代码，包含当前所有规则配置。导出的代码可以直接部署到其他 EdgeOne 项目，无需管理面板和 KV 存储。
 
 ## 构建
 
