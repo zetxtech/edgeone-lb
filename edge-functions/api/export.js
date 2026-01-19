@@ -53,22 +53,34 @@ export async function middleware(context) {
     return Response.redirect(url.toString(), 302);
   }
 
-  // Health check endpoint - return backend status
-  if (url.pathname === '/_health' && rule.healthPath) {
-    const healthStatus = {
-      domain: hostname,
-      platform: rule.platform || 'edgeone',
-      healthPath: rule.healthPath,
-      forceHttps: rule.forceHttps,
-      targets: rule.targets.map(t => ({
-        host: t.host,
+  // Health check endpoint - return backend status (same format as worker.js)
+  if (url.pathname === '/_health') {
+    const cache = await caches.open('cache:host-metrics');
+    const statusReport = {};
+    
+    await Promise.all(rule.targets.map(async (t) => {
+      const key = new Request(\`https://\${t.host}/_metric\`);
+      const resp = await cache.match(key);
+      
+      let info = { status: 'pending', latency: null, lastChecked: null };
+      if (resp) {
+        try { info = await resp.json(); } catch {}
+      }
+
+      statusReport[t.host] = {
         type: t.type,
-        status: 'configured'
-      }))
-    };
-    return new Response(JSON.stringify(healthStatus, null, 2), {
+        status: info.status,
+        latency: info.latency === 9999 ? 'TimeOut' : \`\${info.latency}ms\`,
+        last_update: info.lastChecked 
+          ? new Date(info.lastChecked).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) 
+          : 'Never',
+        reason: info.reason || 'OK'
+      };
+    }));
+
+    return new Response(JSON.stringify(statusReport, null, 2), {
       headers: { 
-        'Content-Type': 'application/json',
+        'Content-Type': 'application/json; charset=utf-8',
         'Access-Control-Allow-Origin': '*'
       }
     });
@@ -121,18 +133,51 @@ export async function middleware(context) {
     });
 
     const results = await Promise.allSettled(checkPromises);
-    const healthReport = {
-      domain: hostname,
-      platform: rule.platform || 'edgeone',
-      healthPath: healthPath,
-      checkTime: new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }),
-      totalTargets: rule.targets.length,
-      results: results.map(r => r.status === 'fulfilled' ? r.value : { error: r.reason?.message || 'Unknown error' })
-    };
+    const healthResults = results.map(r => r.status === 'fulfilled' ? r.value : { error: r.reason?.message || 'Unknown error' });
+    
+    // Cache health check results using Cache API (TTL: 10 minutes)
+    const cache = await caches.open('cache:host-metrics');
+    const statusReport = {};
+    
+    for (const result of healthResults) {
+      if (result.host) {
+        const latencyMs = typeof result.latency === 'string' 
+          ? (result.latency === 'TimeOut' ? 9999 : parseInt(result.latency)) 
+          : result.latency;
+        
+        const cacheKey = new Request(\`https://\${result.host}/_metric\`);
+        const metricsData = {
+          status: result.status,
+          latency: latencyMs,
+          reason: result.error || (result.statusCode ? \`HTTP \${result.statusCode}\` : 'OK'),
+          lastChecked: Date.now()
+        };
+        
+        await cache.put(cacheKey, new Response(JSON.stringify(metricsData), {
+          headers: { 
+            'Content-Type': 'application/json',
+            'Cache-Control': 'public, max-age=600'
+          }
+        }));
+        
+        // Build status report in same format as /_health
+        statusReport[result.host] = {
+          type: result.type,
+          status: result.status,
+          latency: result.latency,
+          last_update: result.timestamp,
+          reason: metricsData.reason
+        };
+      }
+    }
 
-    return new Response(JSON.stringify(healthReport, null, 2), {
+    return new Response(JSON.stringify(statusReport, null, 2), {
       headers: { 
         'Content-Type': 'application/json; charset=utf-8',
+        'Access-Control-Allow-Origin': '*'
+      }
+    });
+  }
         'Access-Control-Allow-Origin': '*'
       }
     });

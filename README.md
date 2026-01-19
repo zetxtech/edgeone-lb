@@ -138,66 +138,61 @@ POST /api/rules
 - 简单轮询负载均衡
 
 ### ✅ 健康检查端点
-访问 `https://your-domain.com/_health` 可查看当前配置状态：
+访问 `https://your-domain.com/_health` 可查看当前配置状态（从缓存读取）：
 
 ```json
 {
   "backend1.example.com": {
     "type": "frp",
-    "status": "configured",
-    "latency": "N/A",
-    "last_update": "EdgeOne uses simple round-robin (no active health checks)",
+    "status": "healthy",
+    "latency": "45ms",
+    "last_update": "2026-01-19 18:30:00",
     "reason": "OK"
   },
-  "_metadata": {
-    "domain": "api.example.com",
-    "platform": "edgeone",
-    "healthPath": "/",
-    "forceHttps": true,
-    "loadBalancingStrategy": "round-robin"
+  "backend2.example.com": {
+    "type": "tunnel",
+    "status": "unhealthy",
+    "latency": "TimeOut",
+    "last_update": "2026-01-19 18:29:55",
+    "reason": "Timeout"
   }
 }
 ```
 
 ### ✅ 触发健康检查端点 🆕
-访问 `https://your-domain.com/_trigger_health_check` 可主动触发对所有后端的健康检查：
+访问 `https://your-domain.com/_trigger_health_check` 可主动触发对所有后端的健康检查并更新缓存：
 
 ```json
 {
-  "domain": "api.example.com",
-  "platform": "edgeone",
-  "healthPath": "/",
-  "checkTime": "2026-01-19 18:30:00",
-  "totalTargets": 3,
-  "results": [
-    {
-      "host": "backend1.example.com",
-      "type": "frp",
-      "status": "healthy",
-      "statusCode": 200,
-      "latency": "45ms",
-      "timestamp": "2026-01-19 18:30:00"
-    },
-    {
-      "host": "backend2.example.com",
-      "type": "tunnel",
-      "status": "unhealthy",
-      "statusCode": 502,
-      "latency": "120ms",
-      "timestamp": "2026-01-19 18:30:00"
-    },
-    {
-      "host": "backend3.example.com",
-      "type": "direct",
-      "status": "unhealthy",
-      "statusCode": null,
-      "latency": "TimeOut",
-      "error": "Connection timeout",
-      "timestamp": "2026-01-19 18:30:00"
-    }
-  ]
+  "backend1.example.com": {
+    "type": "frp",
+    "status": "healthy",
+    "latency": "45ms",
+    "last_update": "2026-01-19 18:30:00",
+    "reason": "OK"
+  },
+  "backend2.example.com": {
+    "type": "tunnel",
+    "status": "unhealthy",
+    "latency": "120ms",
+    "last_update": "2026-01-19 18:30:00",
+    "reason": "HTTP 502"
+  },
+  "backend3.example.com": {
+    "type": "direct",
+    "status": "unhealthy",
+    "latency": "TimeOut",
+    "last_update": "2026-01-19 18:30:00",
+    "reason": "Timeout"
+  }
 }
 ```
+
+**特点：**
+- 实时探测所有后端健康状态
+- 结果自动缓存 10 分钟（使用 Cache API）
+- 返回格式与 `/_health` 完全一致
+- 支持 CORS（`Access-Control-Allow-Origin: *`）
 
 **用途：**
 - 配合外部监控服务（UptimeRobot、Pingdom、监控宝等）定时触发
@@ -214,11 +209,19 @@ POST /api/rules
 |------|------------------------|------------------------------|
 | 配置方式 | 硬编码在代码中 | 存储在 KV，可通过管理面板修改 |
 | 域名管理 | 需要修改代码 | 可在线编辑，支持重命名 |
-| Health Check | 支持后台定时检查 + 缓存 | `/_health` 查看配置 + `/_trigger_health_check` 主动探测 |
-| 健康检查触发 | Cron Trigger (scheduled) | HTTP 触发（外部监控服务） |
+| Health Check | Cron Trigger 后台定时检查 | HTTP 触发（外部监控服务） |
+| 健康检查缓存 | Cache API（10 分钟 TTL） | Cache API（10 分钟 TTL） |
+| 健康检查触发 | `scheduled` 事件自动触发 | `/_trigger_health_check` 手动触发 |
+| 健康状态查询 | `/_health` 从缓存读取 | `/_health` 从缓存读取 |
 | 平台标识 | 无 | 自动标记 `platform: "edgeone"` |
-| 负载均衡 | 串行故障转移 + 健康度排序 | 简单轮询 |
+| 负载均衡 | 串行故障转移 + 健康度排序 | 简单轮询（不依赖健康状态） |
 | 部署方式 | Cloudflare Workers | EdgeOne Pages |
+
+**主要差异说明：**
+- Worker 版本使用 Cron Trigger 自动定时检查，EdgeOne 版本需要外部服务触发
+- 两者都使用 Cache API 缓存健康检查结果，TTL 均为 10 分钟
+- Worker 版本的负载均衡会根据健康状态智能选择，EdgeOne 版本使用简单轮询
+- 返回格式完全一致，便于迁移和监控集成
 
 ## 监控集成示例
 
@@ -226,18 +229,27 @@ POST /api/rules
 1. 创建新的 HTTP(s) 监控
 2. URL: `https://your-domain.com/_trigger_health_check`
 3. 监控间隔: 5 分钟
-4. 关键字监控: `"platform": "edgeone"`（确保返回正确）
+4. 关键字监控: `"status"` 或 `"healthy"`（确保返回正确）
 
 ### 使用 Pingdom
 1. 添加 Uptime Check
 2. URL: `https://your-domain.com/_trigger_health_check`
 3. Check interval: 5 minutes
-4. Response validation: Contains `"platform"`
+4. Response validation: Contains `"status"`
+
+### 使用监控宝
+1. 创建 HTTP 监控
+2. URL: `https://your-domain.com/_trigger_health_check`
+3. 监控频率: 5 分钟
+4. 响应内容包含: `status`
 
 ### 使用 cURL + Cron
 ```bash
 # 添加到 crontab
 */5 * * * * curl -s https://your-domain.com/_trigger_health_check > /dev/null
+
+# 或者带告警
+*/5 * * * * curl -s https://your-domain.com/_trigger_health_check | jq -e '.[] | select(.status=="unhealthy")' && echo "Backend down!" | mail -s "Alert" admin@example.com
 ```
 
 ### 使用 GitHub Actions
@@ -254,7 +266,54 @@ jobs:
     steps:
       - name: Trigger Health Check
         run: |
-          curl -s https://your-domain.com/_trigger_health_check | jq .
+          RESPONSE=$(curl -s https://your-domain.com/_trigger_health_check)
+          echo "$RESPONSE" | jq .
+          
+          # Check for unhealthy backends
+          UNHEALTHY=$(echo "$RESPONSE" | jq -r '.[] | select(.status=="unhealthy") | .host')
+          if [ -n "$UNHEALTHY" ]; then
+            echo "::error::Unhealthy backends detected: $UNHEALTHY"
+            exit 1
+          fi
+```
+
+### 使用 Cloudflare Workers Cron (推荐)
+如果你有 Cloudflare Workers，可以创建一个定时触发器：
+
+```javascript
+export default {
+  async scheduled(event, env, ctx) {
+    const domains = [
+      'domain1.com',
+      'domain2.com',
+      'domain3.com'
+    ];
+    
+    for (const domain of domains) {
+      try {
+        const response = await fetch(`https://${domain}/_trigger_health_check`);
+        const data = await response.json();
+        console.log(`Health check for ${domain}:`, data);
+        
+        // 可以在这里添加告警逻辑
+        for (const [host, status] of Object.entries(data)) {
+          if (status.status === 'unhealthy') {
+            console.error(`Backend ${host} is unhealthy!`);
+            // 发送告警通知
+          }
+        }
+      } catch (e) {
+        console.error(`Failed to check ${domain}:`, e);
+      }
+    }
+  }
+};
+```
+
+在 `wrangler.toml` 中配置：
+```toml
+[triggers]
+crons = ["*/5 * * * *"]  # 每 5 分钟执行一次
 ```
 
 ## 注意事项

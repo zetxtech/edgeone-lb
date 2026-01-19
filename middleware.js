@@ -67,30 +67,30 @@ export async function middleware(context) {
       return Response.redirect(url.toString(), 302);
     }
 
-    // Health check endpoint - return backend status (similar to worker.js)
+    // Health check endpoint - return backend status (same format as worker.js)
     if (url.pathname === '/_health') {
+      const cache = await caches.open('cache:host-metrics');
       const statusReport = {};
       
-      // Format similar to worker.js for consistency
-      rule.targets.forEach(t => {
+      await Promise.all(rule.targets.map(async (t) => {
+        const key = new Request(`https://${t.host}/_metric`);
+        const resp = await cache.match(key);
+        
+        let info = { status: 'pending', latency: null, lastChecked: null };
+        if (resp) {
+          try { info = await resp.json(); } catch {}
+        }
+
         statusReport[t.host] = {
           type: t.type,
-          status: 'configured',
-          latency: 'N/A',
-          last_update: 'EdgeOne uses simple round-robin (no active health checks)',
-          reason: 'OK'
+          status: info.status,
+          latency: info.latency === 9999 ? 'TimeOut' : `${info.latency}ms`,
+          last_update: info.lastChecked 
+            ? new Date(info.lastChecked).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) 
+            : 'Never',
+          reason: info.reason || 'OK'
         };
-      });
-
-      // Add metadata
-      statusReport['_metadata'] = {
-        domain: hostname,
-        platform: rule.platform || 'edgeone',
-        healthPath: rule.healthPath || '/',
-        forceHttps: rule.forceHttps || false,
-        loadBalancingStrategy: 'round-robin',
-        note: 'EdgeOne version uses simple round-robin without active health monitoring'
-      };
+      }));
 
       return new Response(JSON.stringify(statusReport, null, 2), {
         headers: { 
@@ -129,8 +129,10 @@ export async function middleware(context) {
             type: target.type,
             status: resp.ok ? 'healthy' : 'unhealthy',
             statusCode: resp.status,
-            latency: `${duration}ms`,
-            timestamp: new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
+            latency: duration,
+            latencyDisplay: `${duration}ms`,
+            timestamp: new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }),
+            timestampMs: Date.now()
           };
         } catch (e) {
           const duration = Date.now() - start;
@@ -139,24 +141,51 @@ export async function middleware(context) {
             type: target.type,
             status: 'unhealthy',
             statusCode: null,
-            latency: duration >= 5000 ? 'TimeOut' : `${duration}ms`,
+            latency: 9999,
+            latencyDisplay: duration >= 5000 ? 'TimeOut' : `${duration}ms`,
             error: e.message,
-            timestamp: new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
+            timestamp: new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }),
+            timestampMs: Date.now()
           };
         }
       });
 
       const results = await Promise.allSettled(checkPromises);
-      const healthReport = {
-        domain: hostname,
-        platform: rule.platform || 'edgeone',
-        healthPath: healthPath,
-        checkTime: new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }),
-        totalTargets: rule.targets.length,
-        results: results.map(r => r.status === 'fulfilled' ? r.value : { error: r.reason?.message || 'Unknown error' })
-      };
+      const healthResults = results.map(r => r.status === 'fulfilled' ? r.value : { error: r.reason?.message || 'Unknown error' });
+      
+      // Cache health check results using Cache API (TTL: 10 minutes)
+      const cache = await caches.open('cache:host-metrics');
+      const statusReport = {};
+      
+      for (const result of healthResults) {
+        if (result.host) {
+          const cacheKey = new Request(`https://${result.host}/_metric`);
+          const metricsData = {
+            status: result.status,
+            latency: result.latency,
+            reason: result.error || (result.statusCode ? `HTTP ${result.statusCode}` : 'OK'),
+            lastChecked: result.timestampMs
+          };
+          
+          await cache.put(cacheKey, new Response(JSON.stringify(metricsData), {
+            headers: { 
+              'Content-Type': 'application/json',
+              'Cache-Control': 'public, max-age=600'
+            }
+          }));
+          
+          // Build status report in same format as /_health
+          statusReport[result.host] = {
+            type: result.type,
+            status: result.status,
+            latency: result.latencyDisplay,
+            last_update: result.timestamp,
+            reason: metricsData.reason
+          };
+        }
+      }
 
-      return new Response(JSON.stringify(healthReport, null, 2), {
+      return new Response(JSON.stringify(statusReport, null, 2), {
         headers: { 
           'Content-Type': 'application/json; charset=utf-8',
           'Access-Control-Allow-Origin': '*'
