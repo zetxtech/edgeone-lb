@@ -167,7 +167,7 @@ function handleRedirect(response, originalUrl) {
   return response;
 }
 
-// Update metrics cache
+// Update metrics cache and KV storage
 async function updateMetrics(cache, host, status, latency, reason = null) {
   const key = new Request(`https://${host}/_metric`);
   const data = {
@@ -177,12 +177,24 @@ async function updateMetrics(cache, host, status, latency, reason = null) {
     lastChecked: Date.now()
   };
   
+  // Write to Cache API (for same-domain access)
   await cache.put(key, new Response(JSON.stringify(data), {
     headers: { 
       "Content-Type": "application/json",
       "Cache-Control": "public, max-age=600"
     }
   }));
+  
+  // Write to KV storage (for cross-domain access)
+  try {
+    if (typeof lb_kv !== 'undefined') {
+      await lb_kv.put(`health:${host}`, JSON.stringify(data), {
+        expirationTtl: 600
+      });
+    }
+  } catch (e) {
+    console.error('Failed to write health metrics to KV:', e);
+  }
 }
 
 // Get sorted candidates by health status and latency (ported from worker.js)
@@ -191,9 +203,24 @@ async function getSortedCandidates(targets, cache) {
     const key = new Request(`https://${t.host}/_metric`);
     const resp = await cache.match(key);
     let data = { status: 'unknown', latency: 9999, lastChecked: 0 };
+    
+    // Try Cache API first
     if (resp) {
       try { data = await resp.json(); } catch {}
+    } else {
+      // Fallback to KV storage for cross-domain access
+      try {
+        if (typeof lb_kv !== 'undefined') {
+          const kvData = await lb_kv.get(`health:${t.host}`, { type: 'json' });
+          if (kvData) {
+            data = kvData;
+          }
+        }
+      } catch (e) {
+        console.error('Failed to read health metrics from KV:', e);
+      }
     }
+    
     return { target: t, ...data };
   });
 
@@ -401,8 +428,22 @@ export async function middleware(context) {
               const resp = await cache.match(key);
               
               let info = { status: 'pending', latency: null, lastChecked: null, reason: null };
+              
+              // Try Cache API first
               if (resp) {
                 try { info = await resp.json(); } catch {}
+              } else {
+                // Fallback to KV storage for cross-domain access
+                try {
+                  if (typeof lb_kv !== 'undefined') {
+                    const kvData = await lb_kv.get(`health:${t.host}`, { type: 'json' });
+                    if (kvData) {
+                      info = kvData;
+                    }
+                  }
+                } catch (e) {
+                  console.error('Failed to read health metrics from KV:', e);
+                }
               }
 
               statusReport[domain][t.host] = {
@@ -435,8 +476,22 @@ export async function middleware(context) {
               const resp = await cache.match(key);
               
               let info = { status: 'pending', latency: null, lastChecked: null };
+              
+              // Try Cache API first
               if (resp) {
                 try { info = await resp.json(); } catch {}
+              } else {
+                // Fallback to KV storage for cross-domain access
+                try {
+                  if (typeof lb_kv !== 'undefined') {
+                    const kvData = await lb_kv.get(`health:${t.host}`, { type: 'json' });
+                    if (kvData) {
+                      info = kvData;
+                    }
+                  }
+                } catch (e) {
+                  console.error('Failed to read health metrics from KV:', e);
+                }
               }
 
               statusReport[domain][t.host] = {
@@ -529,8 +584,22 @@ export async function middleware(context) {
         const resp = await cache.match(key);
         
         let info = { status: 'pending', latency: null, lastChecked: null };
+        
+        // Try Cache API first
         if (resp) {
           try { info = await resp.json(); } catch {}
+        } else {
+          // Fallback to KV storage for cross-domain access
+          try {
+            if (typeof lb_kv !== 'undefined') {
+              const kvData = await lb_kv.get(`health:${t.host}`, { type: 'json' });
+              if (kvData) {
+                info = kvData;
+              }
+            }
+          } catch (e) {
+            console.error('Failed to read health metrics from KV:', e);
+          }
         }
 
         statusReport[t.host] = {
@@ -570,8 +639,22 @@ export async function middleware(context) {
         const resp = await cache.match(key);
         
         let info = { status: 'pending', latency: null, lastChecked: null, reason: null };
+        
+        // Try Cache API first
         if (resp) {
           try { info = await resp.json(); } catch {}
+        } else {
+          // Fallback to KV storage for cross-domain access
+          try {
+            if (typeof lb_kv !== 'undefined') {
+              const kvData = await lb_kv.get(`health:${t.host}`, { type: 'json' });
+              if (kvData) {
+                info = kvData;
+              }
+            }
+          } catch (e) {
+            console.error('Failed to read health metrics from KV:', e);
+          }
         }
 
         statusReport[t.host] = {
