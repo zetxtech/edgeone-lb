@@ -281,19 +281,47 @@ async function probeTarget(target, request, originalUrl, isWebSocket, signal) {
 
     const resp = await fetch(upstreamReq);
 
+    // WebSocket handling: check for webSocket property on response
+    if (isWebSocket) {
+      // In EdgeOne/Cloudflare Workers, WebSocket upgrade responses have a webSocket property
+      if (resp.webSocket) {
+        // Return the response with webSocket property intact for proper WebSocket proxying
+        return { 
+          ok: true, 
+          response: new Response(null, {
+            status: 101,
+            webSocket: resp.webSocket
+          }),
+          isWebSocket: true 
+        };
+      }
+      
+      // Fallback: validate WebSocket response status
+      const judged = await judgeAndMaybeTransformResponse({
+        resp,
+        target,
+        isWebSocket: true,
+        originalUrl,
+      });
+
+      if (!judged.ok) {
+        return { ok: false, reason: judged.reason };
+      }
+
+      // Return original response for WebSocket (don't wrap it)
+      return { ok: true, response: judged.response, isWebSocket: true };
+    }
+
+    // HTTP request handling
     const judged = await judgeAndMaybeTransformResponse({
       resp,
       target,
-      isWebSocket,
+      isWebSocket: false,
       originalUrl,
     });
 
     if (!judged.ok) {
       return { ok: false, reason: judged.reason };
-    }
-
-    if (isWebSocket) {
-      return { ok: true, response: judged.response };
     }
 
     const headers = new Headers(judged.response.headers);
@@ -305,7 +333,8 @@ async function probeTarget(target, request, originalUrl, isWebSocket, signal) {
         status: judged.response.status,
         statusText: judged.response.statusText,
         headers: headers,
-      })
+      }),
+      isWebSocket: false
     };
 
   } catch (e) {
@@ -708,7 +737,14 @@ export async function middleware(context) {
         if (result && result.ok) {
           await updateMetrics(cache, item.target.host, 'healthy', duration);
           
-          // Add custom headers
+          // WebSocket: return original response directly without modification
+          // Wrapping WebSocket 101 response would break the connection
+          if (result.isWebSocket) {
+            response = result.response;
+            break;
+          }
+          
+          // HTTP: Add custom headers
           const responseHeaders = new Headers(result.response.headers);
           responseHeaders.set('X-LB-Backend', item.target.host);
           responseHeaders.set('X-LB-Powered-By', 'EdgeOne-LB');
