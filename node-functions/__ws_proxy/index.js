@@ -143,13 +143,74 @@ function buildUpstreamWsUrl(targetHost, originalUrl, originalPath, originalSearc
   return base.toString();
 }
 
-export const onRequest = async (context) => {
+function buildUpstreamWsUrlWithProto(targetHost, originalUrl, originalPath, originalSearch, originalProto) {
+  const base = new URL(originalUrl);
+  const parts = String(targetHost).split(':');
+  base.hostname = parts[0];
+  if (parts[1]) base.port = parts[1];
+
+  const proto = String(originalProto || '').toLowerCase();
+  if (proto === 'https' || proto === 'wss') {
+    base.protocol = 'wss:';
+  } else if (proto === 'http' || proto === 'ws') {
+    base.protocol = 'ws:';
+  } else {
+    base.protocol = base.protocol === 'https:' ? 'wss:' : 'ws:';
+  }
+
+  base.pathname = originalPath || '/';
+  if (originalSearch) {
+    base.search = originalSearch.startsWith('?') ? originalSearch : `?${originalSearch}`;
+  } else {
+    base.search = '';
+  }
+
+  return base.toString();
+}
+
+const PROXY_VERSION = 'ws-proxy-v2';
+
+async function onRequest(context) {
   const { request, env } = context;
   try {
     const upgradeHeader = request.headers.get('upgrade');
     const url = new URL(request.url);
+    const diag = url.searchParams.get('diag') === '1';
 
     if (upgradeHeader?.toLowerCase() !== 'websocket') {
+      if (diag) {
+        const kv = getKv(env);
+        let debugEnabled = null;
+        try {
+          debugEnabled = kv ? await kv.get(DEBUG_FLAG_KEY) : null;
+        } catch {
+          debugEnabled = 'error';
+        }
+
+        const wsCtor = await resolveWebSocketCtor();
+        const wsInfo = {
+          available: !!wsCtor,
+          name: wsCtor?.name || null,
+          isWsLibrary: typeof wsCtor?.prototype?.on === 'function',
+        };
+
+        return new Response(JSON.stringify({
+          ok: true,
+          version: PROXY_VERSION,
+          note: 'This endpoint expects an HTTP GET with Upgrade: websocket',
+          url: request.url,
+          upgrade: upgradeHeader || null,
+          kvAvailable: !!kv,
+          debugEnabled,
+          ws: wsInfo,
+          envAvailable: !!env,
+          envKeysCount: env ? Object.keys(env).length : 0,
+        }, null, 2), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        });
+      }
+
       return new Response('Expected Upgrade: websocket', {
         status: 426,
         headers: {
@@ -159,9 +220,10 @@ export const onRequest = async (context) => {
       });
     }
 
-    const originalHost = url.searchParams.get('host') || '';
-    const originalPath = url.searchParams.get('path') || '';
-    const originalSearch = url.searchParams.get('search') || '';
+    const originalHost = (url.searchParams.get('host') || '').trim();
+    const originalPath = (url.searchParams.get('path') || '').trim();
+    const originalSearch = (url.searchParams.get('search') || '').trim();
+    const originalProto = (url.searchParams.get('proto') || '').trim();
 
   await debugLog(env, 'WS-Proxy: upgrade request', {
     originalHost,
@@ -185,7 +247,7 @@ export const onRequest = async (context) => {
       return new Response('No backend available', { status: 503 });
     }
 
-    const upstreamUrl = buildUpstreamWsUrl(target.host, request.url, originalPath, originalSearch);
+    const upstreamUrl = buildUpstreamWsUrlWithProto(target.host, request.url, originalPath, originalSearch, originalProto);
 
   await debugLog(env, 'WS-Proxy: selected upstream', {
     target: target.host,
@@ -199,9 +261,22 @@ export const onRequest = async (context) => {
     return { websocket: createProxyHandler(upstreamUrl, env) };
   } catch (err) {
     await debugLog(context?.env, 'WS-Proxy: onRequest crash', { error: stringifyError(err) });
-    return new Response('Internal Error', { status: 500 });
+
+    // If the request is not a WS upgrade, allow reading diagnostics in browser.
+    // For WS upgrade failures, most clients won't show body; use diag=1 non-WS request for inspection.
+    return new Response(JSON.stringify({
+      error: 'Internal Error',
+      version: PROXY_VERSION,
+      detail: stringifyError(err),
+    }, null, 2), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json; charset=utf-8' },
+    });
   }
-};
+}
+
+export { onRequest };
+export default onRequest;
 
 function createProxyHandler(upstreamUrl, env) {
   let upstream = null;

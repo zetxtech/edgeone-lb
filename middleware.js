@@ -944,6 +944,11 @@ export async function middleware(context) {
       proxyUrl.searchParams.set('host', hostname);
       proxyUrl.searchParams.set('path', url.pathname);
       proxyUrl.searchParams.set('search', url.search);
+      proxyUrl.searchParams.set('proto', request.headers.get('x-forwarded-proto') || request.headers.get('X-Forwarded-Proto') || url.protocol.replace(':', ''));
+
+      // In some environments, request.url may be represented as http even when the external scheme is https/wss.
+      // Force internal rewrite URL to https to avoid platform handshake issues.
+      proxyUrl.protocol = 'https:';
 
       return rewrite(proxyUrl.toString());
     }
