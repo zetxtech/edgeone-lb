@@ -508,6 +508,11 @@ export async function middleware(context) {
   const url = new URL(request.url);
   const hostname = url.hostname;
 
+  // Allow internal WebSocket proxy handler to run (avoid recursion in middleware)
+  if (url.pathname === '/__ws_proxy') {
+    return next();
+  }
+
   // Check if this is the admin panel
   const isAdmin = ADMIN_HOSTNAMES.includes(hostname) ||
                   hostname.endsWith('.edgeone.run') || 
@@ -924,102 +929,23 @@ export async function middleware(context) {
     // Get sorted candidates by health status and latency
     const candidates = await getSortedCandidates(targets, cache);
     
-    // For WebSocket requests, we need special handling
+    // WebSocket requests: delegate to Node Functions WebSocket proxy handler.
+    // Middleware runtime does not provide WebSocketPair, and rewrite() does not keep WS upgraded.
     if (isWebSocket) {
-      await debugLog('WebSocket request detected', {
+      await debugLog('WebSocket request detected (delegating to Node Function)', {
         url: url.toString(),
         hostname,
         path: url.pathname,
-        candidatesCount: candidates.length,
-        rewriteAvailable: typeof rewrite === 'function',
-        WebSocketPairAvailable: typeof WebSocketPair !== 'undefined'
+        candidatesCount: candidates.length
       });
-      
-      // Find the first healthy or unknown target
-      const wsTarget = candidates.find(c => c.status === 'healthy' || c.status === 'unknown')?.target 
-                    || candidates[0]?.target;
-      
-      if (!wsTarget) {
-        await debugLog('WebSocket: No target available');
-        return new Response(JSON.stringify({ error: 'No WebSocket backend available' }), {
-          status: 503,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-      
-      const upstreamUrl = new URL(url);
-      const parts = wsTarget.host.split(":");
-      upstreamUrl.hostname = parts[0];
-      if (parts[1]) upstreamUrl.port = parts[1];
-      
-      await debugLog('WebSocket: Selected target', {
-        target: wsTarget.host,
-        type: wsTarget.type,
-        upstreamUrl: upstreamUrl.toString()
-      });
-      
-      // Strategy 1: Try rewrite (let EdgeOne handle WebSocket upgrade)
-      if (typeof rewrite === 'function') {
-        await debugLog('WebSocket: Trying rewrite strategy');
-        try {
-          return rewrite(upstreamUrl.toString());
-        } catch (e) {
-          await debugLog('WebSocket: rewrite failed', { error: e.message });
-        }
-      }
-      
-      // Strategy 2: Try fetch with WebSocket headers and return response directly
-      await debugLog('WebSocket: Trying fetch strategy');
-      try {
-        const upstreamHeaders = new Headers(request.headers);
-        upstreamHeaders.set('Host', wsTarget.host);
-        
-        const upstreamReq = new Request(upstreamUrl, {
-          method: request.method,
-          headers: upstreamHeaders,
-          body: null,
-          redirect: "manual"
-        });
-        
-        const resp = await fetch(upstreamReq);
-        
-        await debugLog('WebSocket: fetch response', {
-          status: resp.status,
-          hasWebSocket: !!resp.webSocket,
-          headers: Object.fromEntries(resp.headers.entries())
-        });
-        
-        // If response has webSocket property, return it directly
-        if (resp.webSocket) {
-          await debugLog('WebSocket: returning response with webSocket property');
-          return resp;
-        }
-        
-        // If status is 101, return as-is
-        if (resp.status === 101) {
-          await debugLog('WebSocket: returning 101 response');
-          return resp;
-        }
-        
-        // Otherwise, the WebSocket upgrade failed
-        await debugLog('WebSocket: upgrade failed', { status: resp.status });
-        return new Response(JSON.stringify({ 
-          error: 'WebSocket upgrade failed',
-          status: resp.status 
-        }), {
-          status: 502,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      } catch (e) {
-        await debugLog('WebSocket: fetch error', { error: e.message, stack: e.stack });
-        return new Response(JSON.stringify({ 
-          error: 'WebSocket connection failed',
-          message: e.message 
-        }), {
-          status: 502,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
+
+      const proxyUrl = new URL(url);
+      proxyUrl.pathname = '/__ws_proxy';
+      proxyUrl.searchParams.set('host', hostname);
+      proxyUrl.searchParams.set('path', url.pathname);
+      proxyUrl.searchParams.set('search', url.search);
+
+      return rewrite(proxyUrl.toString());
     }
     
     const REQUEST_TIMEOUT = 10000;
