@@ -11,19 +11,30 @@
  * - search: original search string (including leading '?', optional)
  */
 
-import { createRequire } from 'module';
-
-const require = createRequire(import.meta.url);
-
 function getKv(env) {
-  return env?.lb_kv || globalThis.lb_kv;
+  // Prefer explicit env binding if available.
+  if (env?.lb_kv) return env.lb_kv;
+
+  // Some EdgeOne runtimes inject KV bindings as global identifiers (not on globalThis).
+  try {
+    // eslint-disable-next-line no-undef
+    if (typeof lb_kv !== 'undefined') return lb_kv;
+  } catch {
+    // ignore
+  }
+
+  // Fallback: if it happens to be attached to globalThis.
+  if (globalThis?.lb_kv) return globalThis.lb_kv;
+
+  return null;
 }
 
-function getWebSocketCtor() {
+async function resolveWebSocketCtor() {
   if (typeof globalThis.WebSocket === 'function') return globalThis.WebSocket;
   try {
-    // ws CJS export is the WebSocket constructor.
-    return require('ws');
+    // 'ws' is CommonJS; dynamic import returns { default: CJSExport }
+    const mod = await import('ws');
+    return mod?.default || mod?.WebSocket || mod;
   } catch {
     return null;
   }
@@ -58,6 +69,19 @@ async function debugLog(env, message, data = null) {
     await kv.put(DEBUG_LOG_KEY, JSON.stringify(logs));
   } catch {
     // ignore
+  }
+}
+
+function stringifyError(err) {
+  try {
+    if (!err) return null;
+    return {
+      name: err.name,
+      message: err.message,
+      stack: err.stack,
+    };
+  } catch {
+    return { message: String(err) };
   }
 }
 
@@ -121,28 +145,23 @@ function buildUpstreamWsUrl(targetHost, originalUrl, originalPath, originalSearc
 
 export const onRequest = async (context) => {
   const { request, env } = context;
-  const upgradeHeader = request.headers.get('upgrade');
-  const url = new URL(request.url);
+  try {
+    const upgradeHeader = request.headers.get('upgrade');
+    const url = new URL(request.url);
 
-  const WebSocketCtor = getWebSocketCtor();
-  if (!WebSocketCtor) {
-    await debugLog(env, 'WS-Proxy: WebSocket ctor unavailable');
-    return new Response('WebSocket runtime unavailable', { status: 500 });
-  }
+    if (upgradeHeader?.toLowerCase() !== 'websocket') {
+      return new Response('Expected Upgrade: websocket', {
+        status: 426,
+        headers: {
+          'Content-Type': 'text/plain',
+          'Upgrade': 'websocket'
+        }
+      });
+    }
 
-  if (upgradeHeader?.toLowerCase() !== 'websocket') {
-    return new Response('Expected Upgrade: websocket', {
-      status: 426,
-      headers: {
-        'Content-Type': 'text/plain',
-        'Upgrade': 'websocket'
-      }
-    });
-  }
-
-  const originalHost = url.searchParams.get('host') || '';
-  const originalPath = url.searchParams.get('path') || '';
-  const originalSearch = url.searchParams.get('search') || '';
+    const originalHost = url.searchParams.get('host') || '';
+    const originalPath = url.searchParams.get('path') || '';
+    const originalSearch = url.searchParams.get('search') || '';
 
   await debugLog(env, 'WS-Proxy: upgrade request', {
     originalHost,
@@ -151,22 +170,22 @@ export const onRequest = async (context) => {
     url: request.url,
   });
 
-  const rules = await getRules(env);
-  const rule = rules?.[originalHost];
-  const targets = rule?.targets || [];
+    const rules = await getRules(env);
+    const rule = rules?.[originalHost];
+    const targets = rule?.targets || [];
 
-  if (!rule || !Array.isArray(targets) || targets.length === 0) {
-    await debugLog(env, 'WS-Proxy: no rule/targets', { originalHost });
-    return new Response('No backend configured', { status: 502 });
-  }
+    if (!rule || !Array.isArray(targets) || targets.length === 0) {
+      await debugLog(env, 'WS-Proxy: no rule/targets', { originalHost });
+      return new Response('No backend configured', { status: 502 });
+    }
 
-  const target = await pickTarget(env, targets);
-  if (!target) {
-    await debugLog(env, 'WS-Proxy: no target pickable', { originalHost });
-    return new Response('No backend available', { status: 503 });
-  }
+    const target = await pickTarget(env, targets);
+    if (!target) {
+      await debugLog(env, 'WS-Proxy: no target pickable', { originalHost });
+      return new Response('No backend available', { status: 503 });
+    }
 
-  const upstreamUrl = buildUpstreamWsUrl(target.host, request.url, originalPath, originalSearch);
+    const upstreamUrl = buildUpstreamWsUrl(target.host, request.url, originalPath, originalSearch);
 
   await debugLog(env, 'WS-Proxy: selected upstream', {
     target: target.host,
@@ -174,21 +193,26 @@ export const onRequest = async (context) => {
     upstreamUrl,
   });
 
-  // EdgeOne Node Functions websocket handler
-  return {
-    websocket: createProxyHandler(WebSocketCtor, upstreamUrl, env)
-  };
+    // EdgeOne Node Functions websocket handler
+    // Note: we intentionally do NOT fail the handshake even if upstream client WebSocket ctor is unavailable.
+    // We'll accept the client connection first and then close it with a proper WS close code if needed.
+    return { websocket: createProxyHandler(upstreamUrl, env) };
+  } catch (err) {
+    await debugLog(context?.env, 'WS-Proxy: onRequest crash', { error: stringifyError(err) });
+    return new Response('Internal Error', { status: 500 });
+  }
 };
 
-function createProxyHandler(WebSocketCtor, upstreamUrl, env) {
+function createProxyHandler(upstreamUrl, env) {
   let upstream = null;
   let client = null;
   let clientClosed = false;
   const pending = [];
   const MAX_PENDING = 256;
 
-  const OPEN_STATE = typeof WebSocketCtor?.OPEN === 'number' ? WebSocketCtor.OPEN : 1;
-  const isWsLibrary = typeof WebSocketCtor?.prototype?.on === 'function';
+  let upstreamCtor = null;
+  let OPEN_STATE = 1;
+  let isWsLibrary = false;
 
   const safeClose = (ws, code, reason) => {
     try {
@@ -231,6 +255,17 @@ function createProxyHandler(WebSocketCtor, upstreamUrl, env) {
       client = ws;
       await debugLog(env, 'WS-Proxy: client open');
 
+      upstreamCtor = await resolveWebSocketCtor();
+      OPEN_STATE = typeof upstreamCtor?.OPEN === 'number' ? upstreamCtor.OPEN : 1;
+      isWsLibrary = typeof upstreamCtor?.prototype?.on === 'function';
+
+      if (!upstreamCtor) {
+        await debugLog(env, 'WS-Proxy: upstream WebSocket ctor unavailable');
+        safeClose(ws, 1011, 'Upstream WebSocket unavailable');
+        cleanup();
+        return;
+      }
+
       const clientProtocol = request?.headers?.get?.('sec-websocket-protocol') || request?.headers?.get?.('Sec-WebSocket-Protocol') || undefined;
 
       try {
@@ -244,12 +279,12 @@ function createProxyHandler(WebSocketCtor, upstreamUrl, env) {
           };
 
           upstream = clientProtocol
-            ? new WebSocketCtor(upstreamUrl, clientProtocol, options)
-            : new WebSocketCtor(upstreamUrl, options);
+            ? new upstreamCtor(upstreamUrl, clientProtocol, options)
+            : new upstreamCtor(upstreamUrl, options);
         } else {
           upstream = clientProtocol
-            ? new WebSocketCtor(upstreamUrl, clientProtocol)
-            : new WebSocketCtor(upstreamUrl);
+            ? new upstreamCtor(upstreamUrl, clientProtocol)
+            : new upstreamCtor(upstreamUrl);
         }
       } catch (e) {
         await debugLog(env, 'WS-Proxy: upstream ctor failed', { error: e.message });
