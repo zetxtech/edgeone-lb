@@ -246,7 +246,9 @@ async function probeTarget(target, request, originalUrl, isWebSocket, signal) {
     if (parts[1]) upstreamUrl.port = parts[1];
 
     const upstreamHeaders = new Headers(request.headers);
-    upstreamHeaders.set('Host', target.host);
+    if (!isWebSocket) {
+      upstreamHeaders.set('Host', target.host);
+    }
     
     const realClientIP = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Real-IP');
     const realCountry = request.headers.get('CF-IPCountry') || 'XX';
@@ -271,6 +273,12 @@ async function probeTarget(target, request, originalUrl, isWebSocket, signal) {
       upstreamHeaders.set('LB-Ray', cfRay);
     }
 
+    if (isWebSocket) {
+      // For WebSocket, keep all original headers including WebSocket handshake headers
+      // The runtime should handle the upgrade automatically
+      upstreamHeaders.set('Host', target.host);
+    }
+
     const upstreamReq = new Request(upstreamUrl, {
       method: request.method,
       headers: upstreamHeaders,
@@ -281,35 +289,97 @@ async function probeTarget(target, request, originalUrl, isWebSocket, signal) {
 
     const resp = await fetch(upstreamReq);
 
-    // WebSocket handling: check for webSocket property on response
     if (isWebSocket) {
-      // In EdgeOne/Cloudflare Workers, WebSocket upgrade responses have a webSocket property
+      // Strategy 1: If runtime provides resp.webSocket (Cloudflare Workers style)
       if (resp.webSocket) {
-        // Return the response with webSocket property intact for proper WebSocket proxying
         return { 
           ok: true, 
-          response: new Response(null, {
-            status: 101,
-            webSocket: resp.webSocket
-          }),
+          response: resp,
           isWebSocket: true 
         };
       }
       
-      // Fallback: validate WebSocket response status
-      const judged = await judgeAndMaybeTransformResponse({
-        resp,
-        target,
-        isWebSocket: true,
-        originalUrl,
-      });
-
-      if (!judged.ok) {
-        return { ok: false, reason: judged.reason };
+      // Strategy 2: If response is 101 Switching Protocols, return as-is
+      if (resp.status === 101) {
+        return { ok: true, response: resp, isWebSocket: true };
       }
-
-      // Return original response for WebSocket (don't wrap it)
-      return { ok: true, response: judged.response, isWebSocket: true };
+      
+      // Strategy 3: Try using WebSocketPair if available
+      if (typeof WebSocketPair !== 'undefined') {
+        // Create a new WebSocket connection to upstream using WebSocket constructor
+        const upstreamWsUrl = new URL(upstreamUrl);
+        upstreamWsUrl.protocol = upstreamWsUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+        
+        try {
+          const upstreamSocket = new WebSocket(upstreamWsUrl.toString());
+          const pair = new WebSocketPair();
+          const [clientSocket, serverSocket] = Object.values(pair);
+          
+          return new Promise((resolve) => {
+            let resolved = false;
+            
+            upstreamSocket.addEventListener('open', () => {
+              if (resolved) return;
+              resolved = true;
+              
+              serverSocket.accept();
+              
+              // Bidirectional message forwarding
+              serverSocket.addEventListener('message', (event) => {
+                try { upstreamSocket.send(event.data); } catch {}
+              });
+              
+              upstreamSocket.addEventListener('message', (event) => {
+                try { serverSocket.send(event.data); } catch {}
+              });
+              
+              serverSocket.addEventListener('close', (event) => {
+                try { upstreamSocket.close(event.code, event.reason); } catch {}
+              });
+              
+              upstreamSocket.addEventListener('close', (event) => {
+                try { serverSocket.close(event.code, event.reason); } catch {}
+              });
+              
+              serverSocket.addEventListener('error', () => {
+                try { upstreamSocket.close(1011, 'Client error'); } catch {}
+              });
+              
+              upstreamSocket.addEventListener('error', () => {
+                try { serverSocket.close(1011, 'Upstream error'); } catch {}
+              });
+              
+              resolve({
+                ok: true,
+                response: new Response(null, {
+                  status: 101,
+                  webSocket: clientSocket
+                }),
+                isWebSocket: true
+              });
+            });
+            
+            upstreamSocket.addEventListener('error', (e) => {
+              if (resolved) return;
+              resolved = true;
+              resolve({ ok: false, reason: `WebSocket connection failed: ${e.message || 'unknown error'}` });
+            });
+            
+            // Timeout after 10 seconds
+            setTimeout(() => {
+              if (resolved) return;
+              resolved = true;
+              try { upstreamSocket.close(); } catch {}
+              resolve({ ok: false, reason: 'WebSocket connection timeout' });
+            }, 10000);
+          });
+        } catch (e) {
+          return { ok: false, reason: `WebSocket error: ${e.message}` };
+        }
+      }
+      
+      // No WebSocket support available
+      return { ok: false, reason: `WebSocket not supported by runtime (status ${resp.status})` };
     }
 
     // HTTP request handling
@@ -390,7 +460,7 @@ async function runBackgroundHealthCheck(candidatesWithStats, healthPath, cache) 
 }
 
 export async function middleware(context) {
-  const { request, next } = context;
+  const { request, next, rewrite } = context;
   const url = new URL(request.url);
   const hostname = url.hostname;
 
@@ -720,6 +790,24 @@ export async function middleware(context) {
     
     // Get sorted candidates by health status and latency
     const candidates = await getSortedCandidates(targets, cache);
+    
+    // For WebSocket requests, try using rewrite to proxy to the first healthy backend
+    // This allows EdgeOne's network layer to handle the WebSocket upgrade
+    if (isWebSocket && typeof rewrite === 'function') {
+      // Find the first healthy or unknown target
+      const wsTarget = candidates.find(c => c.status === 'healthy' || c.status === 'unknown')?.target 
+                    || candidates[0]?.target;
+      
+      if (wsTarget) {
+        const upstreamUrl = new URL(url);
+        const parts = wsTarget.host.split(":");
+        upstreamUrl.hostname = parts[0];
+        if (parts[1]) upstreamUrl.port = parts[1];
+        
+        console.log(`[WebSocket] Rewriting to upstream: ${upstreamUrl.toString()}`);
+        return rewrite(upstreamUrl.toString());
+      }
+    }
     
     const REQUEST_TIMEOUT = 10000;
     const FAST_FAIL_TIMEOUT = 3000;
