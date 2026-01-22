@@ -9,6 +9,50 @@ const ADMIN_HOSTNAMES = [
 ];
 
 // =================================================================
+// Debug Logging (writes to KV when LB_DEBUG env var is set)
+// =================================================================
+const DEBUG_LOG_KEY = 'debug:logs';
+const MAX_LOG_ENTRIES = 100;
+
+async function debugLog(message, data = null) {
+  // Check if debug mode is enabled via environment variable
+  // In EdgeOne Pages, we check for a KV key instead
+  try {
+    if (typeof lb_kv === 'undefined') return;
+    
+    const debugEnabled = await lb_kv.get('config:debug');
+    if (debugEnabled !== 'true') return;
+    
+    const timestamp = new Date().toISOString();
+    const logEntry = {
+      timestamp,
+      message,
+      data: data ? JSON.stringify(data) : null
+    };
+    
+    // Get existing logs
+    let logs = [];
+    try {
+      const existing = await lb_kv.get(DEBUG_LOG_KEY, { type: 'json' });
+      if (Array.isArray(existing)) {
+        logs = existing;
+      }
+    } catch {}
+    
+    // Add new entry and trim to max size
+    logs.unshift(logEntry);
+    if (logs.length > MAX_LOG_ENTRIES) {
+      logs = logs.slice(0, MAX_LOG_ENTRIES);
+    }
+    
+    // Save back to KV
+    await lb_kv.put(DEBUG_LOG_KEY, JSON.stringify(logs));
+  } catch (e) {
+    // Silently fail - don't break the request
+  }
+}
+
+// =================================================================
 // Utility: Create AbortSignal with timeout (compatibility wrapper)
 // =================================================================
 function createTimeoutSignal(timeoutMs) {
@@ -470,6 +514,95 @@ export async function middleware(context) {
                   hostname.endsWith('.edgeone.site');
 
   if (isAdmin) {
+    // Debug log endpoints
+    if (url.pathname === '/_debug/logs') {
+      try {
+        if (typeof lb_kv === 'undefined') {
+          return new Response(JSON.stringify({ error: 'KV not bound' }), {
+            status: 503,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+        
+        const logs = await lb_kv.get(DEBUG_LOG_KEY, { type: 'json' }) || [];
+        return new Response(JSON.stringify(logs, null, 2), {
+          headers: { 
+            'Content-Type': 'application/json; charset=utf-8',
+            'Access-Control-Allow-Origin': '*'
+          }
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: e.message }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+    }
+    
+    if (url.pathname === '/_debug/enable') {
+      try {
+        if (typeof lb_kv === 'undefined') {
+          return new Response(JSON.stringify({ error: 'KV not bound' }), {
+            status: 503,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+        
+        await lb_kv.put('config:debug', 'true');
+        return new Response(JSON.stringify({ status: 'Debug logging enabled' }), {
+          headers: { 'Content-Type': 'application/json' }
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: e.message }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+    }
+    
+    if (url.pathname === '/_debug/disable') {
+      try {
+        if (typeof lb_kv === 'undefined') {
+          return new Response(JSON.stringify({ error: 'KV not bound' }), {
+            status: 503,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+        
+        await lb_kv.put('config:debug', 'false');
+        await lb_kv.delete(DEBUG_LOG_KEY);
+        return new Response(JSON.stringify({ status: 'Debug logging disabled and logs cleared' }), {
+          headers: { 'Content-Type': 'application/json' }
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: e.message }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+    }
+    
+    if (url.pathname === '/_debug/clear') {
+      try {
+        if (typeof lb_kv === 'undefined') {
+          return new Response(JSON.stringify({ error: 'KV not bound' }), {
+            status: 503,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+        
+        await lb_kv.delete(DEBUG_LOG_KEY);
+        return new Response(JSON.stringify({ status: 'Debug logs cleared' }), {
+          headers: { 'Content-Type': 'application/json' }
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: e.message }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
     // Handle special endpoints for admin panel
     if (url.pathname === '/_trigger_health_check' || url.pathname === '/_health') {
       try {
@@ -791,21 +924,101 @@ export async function middleware(context) {
     // Get sorted candidates by health status and latency
     const candidates = await getSortedCandidates(targets, cache);
     
-    // For WebSocket requests, try using rewrite to proxy to the first healthy backend
-    // This allows EdgeOne's network layer to handle the WebSocket upgrade
-    if (isWebSocket && typeof rewrite === 'function') {
+    // For WebSocket requests, we need special handling
+    if (isWebSocket) {
+      await debugLog('WebSocket request detected', {
+        url: url.toString(),
+        hostname,
+        path: url.pathname,
+        candidatesCount: candidates.length,
+        rewriteAvailable: typeof rewrite === 'function',
+        WebSocketPairAvailable: typeof WebSocketPair !== 'undefined'
+      });
+      
       // Find the first healthy or unknown target
       const wsTarget = candidates.find(c => c.status === 'healthy' || c.status === 'unknown')?.target 
                     || candidates[0]?.target;
       
-      if (wsTarget) {
-        const upstreamUrl = new URL(url);
-        const parts = wsTarget.host.split(":");
-        upstreamUrl.hostname = parts[0];
-        if (parts[1]) upstreamUrl.port = parts[1];
+      if (!wsTarget) {
+        await debugLog('WebSocket: No target available');
+        return new Response(JSON.stringify({ error: 'No WebSocket backend available' }), {
+          status: 503,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      
+      const upstreamUrl = new URL(url);
+      const parts = wsTarget.host.split(":");
+      upstreamUrl.hostname = parts[0];
+      if (parts[1]) upstreamUrl.port = parts[1];
+      
+      await debugLog('WebSocket: Selected target', {
+        target: wsTarget.host,
+        type: wsTarget.type,
+        upstreamUrl: upstreamUrl.toString()
+      });
+      
+      // Strategy 1: Try rewrite (let EdgeOne handle WebSocket upgrade)
+      if (typeof rewrite === 'function') {
+        await debugLog('WebSocket: Trying rewrite strategy');
+        try {
+          return rewrite(upstreamUrl.toString());
+        } catch (e) {
+          await debugLog('WebSocket: rewrite failed', { error: e.message });
+        }
+      }
+      
+      // Strategy 2: Try fetch with WebSocket headers and return response directly
+      await debugLog('WebSocket: Trying fetch strategy');
+      try {
+        const upstreamHeaders = new Headers(request.headers);
+        upstreamHeaders.set('Host', wsTarget.host);
         
-        console.log(`[WebSocket] Rewriting to upstream: ${upstreamUrl.toString()}`);
-        return rewrite(upstreamUrl.toString());
+        const upstreamReq = new Request(upstreamUrl, {
+          method: request.method,
+          headers: upstreamHeaders,
+          body: null,
+          redirect: "manual"
+        });
+        
+        const resp = await fetch(upstreamReq);
+        
+        await debugLog('WebSocket: fetch response', {
+          status: resp.status,
+          hasWebSocket: !!resp.webSocket,
+          headers: Object.fromEntries(resp.headers.entries())
+        });
+        
+        // If response has webSocket property, return it directly
+        if (resp.webSocket) {
+          await debugLog('WebSocket: returning response with webSocket property');
+          return resp;
+        }
+        
+        // If status is 101, return as-is
+        if (resp.status === 101) {
+          await debugLog('WebSocket: returning 101 response');
+          return resp;
+        }
+        
+        // Otherwise, the WebSocket upgrade failed
+        await debugLog('WebSocket: upgrade failed', { status: resp.status });
+        return new Response(JSON.stringify({ 
+          error: 'WebSocket upgrade failed',
+          status: resp.status 
+        }), {
+          status: 502,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      } catch (e) {
+        await debugLog('WebSocket: fetch error', { error: e.message, stack: e.stack });
+        return new Response(JSON.stringify({ 
+          error: 'WebSocket connection failed',
+          message: e.message 
+        }), {
+          status: 502,
+          headers: { 'Content-Type': 'application/json' }
+        });
       }
     }
     
