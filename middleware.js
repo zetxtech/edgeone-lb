@@ -931,17 +931,32 @@ export async function middleware(context) {
     
     // WebSocket requests: delegate to Node Functions WebSocket proxy handler.
     // Middleware runtime does not provide WebSocketPair, and rewrite() does not keep WS upgraded.
+    // Node Functions do NOT have access to KV, so we pass the selected target directly via query params.
     if (isWebSocket) {
+      // Find the first healthy or unknown target
+      const wsTarget = candidates.find(c => c.status === 'healthy' || c.status === 'unknown')?.target 
+                    || candidates[0]?.target;
+      
+      if (!wsTarget) {
+        await debugLog('WebSocket: No target available', { hostname, candidatesCount: candidates.length });
+        return new Response(JSON.stringify({ error: 'No WebSocket backend available' }), {
+          status: 503,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+
       await debugLog('WebSocket request detected (delegating to Node Function)', {
         url: url.toString(),
         hostname,
         path: url.pathname,
-        candidatesCount: candidates.length
+        candidatesCount: candidates.length,
+        selectedTarget: wsTarget.host
       });
 
       const proxyUrl = new URL(url);
       proxyUrl.pathname = '/__ws_proxy';
-      proxyUrl.searchParams.set('host', hostname);
+      // Pass target info directly so Node Function doesn't need KV
+      proxyUrl.searchParams.set('target', wsTarget.host);
       proxyUrl.searchParams.set('path', url.pathname);
       proxyUrl.searchParams.set('search', url.search);
       proxyUrl.searchParams.set('proto', request.headers.get('x-forwarded-proto') || request.headers.get('X-Forwarded-Proto') || url.protocol.replace(':', ''));
