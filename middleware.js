@@ -929,6 +929,14 @@ export async function middleware(context) {
     // Get sorted candidates by health status and latency
     const candidates = await getSortedCandidates(targets, cache);
     
+    await debugLog('Request received', {
+      hostname,
+      path: url.pathname,
+      method: request.method,
+      candidatesCount: candidates.length,
+      clientIP: request.headers.get('CF-Connecting-IP') || request.headers.get('X-Real-IP')
+    });
+
     // WebSocket requests: delegate to Node Functions WebSocket proxy handler.
     // Middleware runtime does not provide WebSocketPair, and rewrite() does not keep WS upgraded.
     // Node Functions do NOT have access to KV, so we pass the selected target directly via query params.
@@ -978,12 +986,25 @@ export async function middleware(context) {
       const timeout = item.status === 'unhealthy' ? FAST_FAIL_TIMEOUT : REQUEST_TIMEOUT;
       
       try {
+        await debugLog('Attempting connection', { 
+          target: item.target.host, 
+          timeout,
+          status: item.status,
+          url: url.toString()
+        });
+
         const result = await probeTarget(item.target, request.clone(), url, isWebSocket, createTimeoutSignal(timeout));
         const duration = Date.now() - start;
         
         if (result && result.ok) {
           await updateMetrics(cache, item.target.host, 'healthy', duration);
           
+          await debugLog('Connection successful', {
+            target: item.target.host,
+            duration,
+            status: result.response.status
+          });
+
           // WebSocket: return original response directly without modification
           // Wrapping WebSocket 101 response would break the connection
           if (result.isWebSocket) {
@@ -1004,11 +1025,24 @@ export async function middleware(context) {
           });
           break;
         } else {
+          await debugLog('Connection failed', {
+            target: item.target.host,
+            duration,
+            reason: result?.reason
+          });
           await updateMetrics(cache, item.target.host, 'unhealthy', duration, result?.reason);
         }
       } catch (e) {
         const duration = Date.now() - start;
         const reason = e.name === 'TimeoutError' ? 'Timeout' : e.message;
+        
+        await debugLog('Connection error', {
+          target: item.target.host,
+          duration,
+          error: reason,
+          stack: e.stack
+        });
+        
         await updateMetrics(cache, item.target.host, 'unhealthy', duration, reason);
       }
     }
@@ -1028,6 +1062,12 @@ export async function middleware(context) {
       return response;
     }
 
+    await debugLog('All backends failed', {
+      hostname,
+      candidatesCount: candidates.length,
+      targets: candidates.map(c => ({ host: c.target.host, status: c.status }))
+    });
+
     return new Response(JSON.stringify({ error: 'Service Unavailable - All backends failed' }), {
       status: 503,
       headers: { 'Content-Type': 'application/json' }
@@ -1035,6 +1075,13 @@ export async function middleware(context) {
 
   } catch (error) {
     console.error('Load balancer error:', error);
+    
+    await debugLog('Critical Internal Error', {
+      message: error.message,
+      stack: error.stack,
+      url: request.url
+    });
+
     return new Response(JSON.stringify({ 
       error: 'Internal server error', 
       message: error.message,

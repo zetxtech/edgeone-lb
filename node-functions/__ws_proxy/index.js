@@ -64,11 +64,37 @@ function buildUpstreamWsUrl(targetHost, originalUrl, originalPath, originalSearc
 
 const PROXY_VERSION = 'ws-proxy-v3';
 
+// Helper to send logs to Edge Functions KV via API
+async function remoteLog(message, data = null) {
+  try {
+    if (!globalThis.LOG_API_URL) return;
+
+    await fetch(globalThis.LOG_API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        source: 'node-function:ws-proxy',
+        message,
+        data
+      })
+    });
+  } catch (e) {
+    // Fallback to console if remote logging fails
+    console.error('Remote logging failed:', e);
+  }
+}
+
 async function onRequest(context) {
   const { request } = context;
   try {
-    const upgradeHeader = request.headers.get('upgrade');
     const url = new URL(request.url);
+    
+    // Store API URL for logging helper
+    // Construct the log ingest URL based on the current request's origin
+    globalThis.LOG_API_URL = `${url.origin}/api/log-ingest`;
+
+    const upgradeHeader = request.headers.get('upgrade');
+
     const diag = url.searchParams.get('diag') === '1';
 
     if (upgradeHeader?.toLowerCase() !== 'websocket') {
@@ -126,8 +152,16 @@ async function onRequest(context) {
     const upstreamUrl = buildUpstreamWsUrl(targetHost, request.url, originalPath, originalSearch, originalProto);
 
     // EdgeOne Node Functions websocket handler
-    return { websocket: createProxyHandler(upstreamUrl) };
+    return { websocket: createProxyHandler(upstreamUrl, targetHost) };
   } catch (err) {
+    const msg = `[WS-Proxy] Internal Error: ${err}`;
+    console.error(msg);
+    // Try to log even if we are about to crash/return 500
+    // Note: remoteLog is async, we don't await it here to avoid delaying the response,
+    // but in a serverless environment this might be cut off.
+    // However, since we are returning a response, the runtime might keep it alive briefly.
+    remoteLog('Internal Error', { error: stringifyError(err) }).catch(() => {});
+
     return new Response(JSON.stringify({
       error: 'Internal Error',
       version: PROXY_VERSION,
@@ -139,7 +173,7 @@ async function onRequest(context) {
   }
 }
 
-function createProxyHandler(upstreamUrl) {
+function createProxyHandler(upstreamUrl, targetHost) {
   let upstream = null;
   let client = null;
   let clientClosed = false;
@@ -194,6 +228,9 @@ function createProxyHandler(upstreamUrl) {
       isWsLibrary = typeof upstreamCtor?.prototype?.on === 'function';
 
       if (!upstreamCtor) {
+        const msg = `[WS-Proxy] Upstream WebSocket unavailable for ${targetHost}`;
+        console.error(msg);
+        remoteLog('Upstream WebSocket unavailable', { target: targetHost });
         safeClose(ws, 1011, 'Upstream WebSocket unavailable');
         cleanup();
         return;
@@ -202,6 +239,10 @@ function createProxyHandler(upstreamUrl) {
       const clientProtocol = request?.headers?.get?.('sec-websocket-protocol') || request?.headers?.get?.('Sec-WebSocket-Protocol') || undefined;
 
       try {
+        const msg = `[WS-Proxy] Connecting to upstream: ${upstreamUrl} (Protocol: ${clientProtocol || 'none'})`;
+        console.log(msg);
+        remoteLog('Connecting to upstream', { url: upstreamUrl, protocol: clientProtocol });
+        
         if (isWsLibrary) {
           const options = {
             handshakeTimeout: 10000,
@@ -220,17 +261,24 @@ function createProxyHandler(upstreamUrl) {
             : new upstreamCtor(upstreamUrl);
         }
       } catch (e) {
+        const msg = `[WS-Proxy] Connection setup failed for ${targetHost}: ${e.message}`;
+        console.error(msg);
+        remoteLog('Connection setup failed', { target: targetHost, error: e.message });
         safeClose(ws, 1011, 'Upstream connect failed');
         cleanup();
         return;
       }
 
       const flushPending = () => {
+        const msg = `[WS-Proxy] Connected to ${targetHost}, flushing ${pending.length} pending messages`;
+        console.log(msg);
+        remoteLog('Connected to upstream', { target: targetHost, pendingCount: pending.length });
         while (pending.length > 0) {
           const item = pending.shift();
           try {
             upstream.send(item.data);
-          } catch {
+          } catch (e) {
+            console.error(`[WS-Proxy] Failed to flush pending message to ${targetHost}:`, e);
             break;
           }
         }
@@ -238,16 +286,27 @@ function createProxyHandler(upstreamUrl) {
 
       const onUpstreamMessage = (data) => {
         if (!safeSend(client, data)) {
+          const msg = `[WS-Proxy] Failed to send upstream message to client (client closed?)`;
+          console.warn(msg);
+          remoteLog('Failed to send to client', { target: targetHost });
           try { upstream.close(); } catch {}
         }
       };
 
       const onUpstreamClose = (code, reason) => {
-        safeClose(client, sanitizeCloseCode(code || 1000), reason?.toString?.() || '');
+        const safeCode = sanitizeCloseCode(code || 1000);
+        const reasonStr = reason?.toString?.() || '';
+        const msg = `[WS-Proxy] Upstream ${targetHost} closed: ${safeCode} ${reasonStr}`;
+        console.log(msg);
+        remoteLog('Upstream closed', { target: targetHost, code: safeCode, reason: reasonStr });
+        safeClose(client, safeCode, reasonStr);
         cleanup();
       };
 
-      const onUpstreamError = () => {
+      const onUpstreamError = (err) => {
+        const msg = `[WS-Proxy] Upstream error for ${targetHost}: ${err}`;
+        console.error(msg);
+        remoteLog('Upstream error', { target: targetHost, error: String(err) });
         safeClose(client, 1011, 'Upstream error');
         cleanup();
       };
@@ -261,7 +320,7 @@ function createProxyHandler(upstreamUrl) {
         upstream.addEventListener('open', () => { flushPending(); });
         upstream.addEventListener('message', (ev) => { onUpstreamMessage(ev?.data); });
         upstream.addEventListener('close', (ev) => { onUpstreamClose(ev?.code, ev?.reason); });
-        upstream.addEventListener('error', () => { onUpstreamError(); });
+        upstream.addEventListener('error', (ev) => { onUpstreamError(ev?.error || ev); });
       }
     },
 
@@ -273,6 +332,9 @@ function createProxyHandler(upstreamUrl) {
 
       if (!upstream || upstream.readyState !== OPEN_STATE) {
         if (pending.length >= MAX_PENDING) {
+          const msg = `[WS-Proxy] Dropping message for ${targetHost}: pending queue full (${MAX_PENDING})`;
+          console.warn(msg);
+          remoteLog('Dropping message (queue full)', { target: targetHost });
           safeClose(ws, 1013, 'Upstream not ready');
           cleanup();
           return;
@@ -283,17 +345,28 @@ function createProxyHandler(upstreamUrl) {
 
       try {
         upstream.send(payload);
-      } catch {}
+      } catch (e) {
+        const msg = `[WS-Proxy] Failed to send message to upstream ${targetHost}: ${e}`;
+        console.error(msg);
+        remoteLog('Failed to send to upstream', { target: targetHost, error: String(e) });
+      }
     },
 
     async onclose(ws, code, reason) {
+      const reasonStr = reason?.toString?.() || '';
+      const msg = `[WS-Proxy] Client closed connection: ${code} ${reasonStr}`;
+      console.log(msg);
+      remoteLog('Client closed connection', { code, reason: reasonStr });
       try {
-        upstream?.close?.(sanitizeCloseCode(code), reason?.toString?.());
+        upstream?.close?.(sanitizeCloseCode(code), reasonStr);
       } catch {}
       cleanup();
     },
 
     async onerror(ws, error) {
+      const msg = `[WS-Proxy] Client error: ${error}`;
+      console.error(msg);
+      remoteLog('Client error', { error: String(error) });
       try {
         upstream?.close?.(1011, 'Client error');
       } catch {}
