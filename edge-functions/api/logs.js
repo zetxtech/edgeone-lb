@@ -2,19 +2,21 @@
 export async function onRequestGet() {
   try {
     if (typeof lb_kv === 'undefined') {
-      return new Response(JSON.stringify({ error: 'KV not bound' }), { status: 500 });
+      return new Response(JSON.stringify({ error: 'KV not bound (lb_kv is undefined)' }), { status: 500 });
     }
     const logs = await lb_kv.get('debug:logs', { type: 'json' }) || [];
     const debugEnabled = await lb_kv.get('config:debug');
     
     return new Response(JSON.stringify({
       enabled: debugEnabled === 'true',
+      kv_status: 'bound',
+      debug_value: debugEnabled,
       logs: logs
     }), {
       headers: { 'Content-Type': 'application/json' }
     });
   } catch (e) {
-    return new Response(JSON.stringify({ error: e.message }), { status: 500 });
+    return new Response(JSON.stringify({ error: e.message, stack: e.stack }), { status: 500 });
   }
 }
 
@@ -32,6 +34,25 @@ export async function onRequestPost({ request }) {
     
     if (body.clear) {
       await lb_kv.put('debug:logs', '[]');
+    }
+
+    if (body.test) {
+      const timestamp = new Date().toISOString();
+      const logEntry = {
+        timestamp,
+        source: 'api:test',
+        message: 'Test log entry',
+        data: 'If you see this, KV writing is working.'
+      };
+      
+      let logs = [];
+      try {
+        const existing = await lb_kv.get('debug:logs', { type: 'json' });
+        if (Array.isArray(existing)) logs = existing;
+      } catch {}
+      
+      logs.unshift(logEntry);
+      await lb_kv.put('debug:logs', JSON.stringify(logs));
     }
     
     return new Response(JSON.stringify({ success: true }), {
