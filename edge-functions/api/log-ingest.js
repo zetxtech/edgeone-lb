@@ -22,7 +22,7 @@ export async function onRequestPost({ request }) {
     };
 
     const DEBUG_LOG_KEY = 'debug:logs';
-    const MAX_LOG_ENTRIES = 100;
+    const MAX_LOG_ENTRIES = 1000;
 
     // Optimistic concurrency control is hard here, just read-modify-write
     // In high traffic this might lose logs, but for debugging it's fine

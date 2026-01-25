@@ -12,21 +12,33 @@ const ADMIN_HOSTNAMES = [
 // Debug Logging (writes to KV when LB_DEBUG env var is set)
 // =================================================================
 const DEBUG_LOG_KEY = 'debug:logs';
-const MAX_LOG_ENTRIES = 100;
+const MAX_LOG_ENTRIES = 1000;
 
-async function debugLog(message, data = null) {
+async function debugLog(message, data = null, level = 'debug') {
   // Check if debug mode is enabled via environment variable
   // In EdgeOne Pages, we check for a KV key instead
   try {
     if (typeof lb_kv === 'undefined') return;
     
     const debugEnabled = await lb_kv.get('config:debug');
-    if (debugEnabled !== 'true') return;
+    const traceEnabled = await lb_kv.get('config:trace');
+    
+    // If trace is enabled, log everything.
+    // If debug is enabled, log everything except 'trace' level.
+    // If neither, log nothing.
+    
+    if (traceEnabled === 'true') {
+      // Log everything
+    } else if (debugEnabled === 'true') {
+      if (level === 'trace') return;
+    } else {
+      return;
+    }
     
     const timestamp = new Date().toISOString();
     const logEntry = {
       timestamp,
-      message,
+      message: level === 'trace' ? `[TRACE] ${message}` : message,
       data: data ? JSON.stringify(data) : null
     };
     
@@ -508,6 +520,13 @@ export async function middleware(context) {
   const url = new URL(request.url);
   const hostname = url.hostname;
 
+  // Trace log for every request
+  await debugLog('Incoming Request', {
+    method: request.method,
+    url: url.toString(),
+    headers: Object.fromEntries(request.headers)
+  }, 'trace');
+
   // Allow internal WebSocket proxy handler to run (avoid recursion in middleware)
   if (url.pathname === '/__ws_proxy') {
     return next();
@@ -647,6 +666,8 @@ export async function middleware(context) {
 
         // Handle /_trigger_health_check
         if (url.pathname === '/_trigger_health_check') {
+          await debugLog('Manual health check triggered', { source: 'admin-panel' });
+
           // Run health check for all domains
           for (const [domain, rule] of Object.entries(rules)) {
             if (rule.targets && rule.targets.length > 0) {
@@ -694,6 +715,8 @@ export async function middleware(context) {
               };
             }));
           }
+
+          await debugLog('Health check completed', { report: statusReport });
 
           return new Response(JSON.stringify(statusReport, null, 2), {
             headers: { 

@@ -6,9 +6,11 @@ export async function onRequestGet() {
     }
     const logs = await lb_kv.get('debug:logs', { type: 'json' }) || [];
     const debugEnabled = await lb_kv.get('config:debug');
+    const traceEnabled = await lb_kv.get('config:trace');
     
     return new Response(JSON.stringify({
       enabled: debugEnabled === 'true',
+      traceEnabled: traceEnabled === 'true',
       kv_status: 'bound',
       debug_value: debugEnabled,
       logs: logs
@@ -30,6 +32,10 @@ export async function onRequestPost({ request }) {
     
     if (typeof body.enabled !== 'undefined') {
       await lb_kv.put('config:debug', body.enabled ? 'true' : 'false');
+    }
+
+    if (typeof body.traceEnabled !== 'undefined') {
+      await lb_kv.put('config:trace', body.traceEnabled ? 'true' : 'false');
     }
     
     if (body.clear) {

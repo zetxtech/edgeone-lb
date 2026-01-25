@@ -85,7 +85,15 @@
                 <div class="w-9 h-5 bg-slate-700 rounded-full peer-checked:bg-purple-500 transition-colors"></div>
                 <div class="absolute left-1 top-1 w-3 h-3 bg-white rounded-full transition-transform peer-checked:translate-x-4"></div>
               </div>
-              <span class="text-xs text-slate-400">Enable Logging</span>
+              <span class="text-xs text-slate-400">Debug</span>
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer">
+              <div class="relative">
+                <input type="checkbox" v-model="traceEnabled" @change="toggleTrace" class="sr-only peer">
+                <div class="w-9 h-5 bg-slate-700 rounded-full peer-checked:bg-blue-500 transition-colors"></div>
+                <div class="absolute left-1 top-1 w-3 h-3 bg-white rounded-full transition-transform peer-checked:translate-x-4"></div>
+              </div>
+              <span class="text-xs text-slate-400">Trace All</span>
             </label>
             <button 
               @click="refreshLogs" 
@@ -433,6 +441,7 @@ const rules = ref({})
 const currentOrigin = ref('')
 const logs = ref([])
 const debugEnabled = ref(false)
+const traceEnabled = ref(false)
 
 const showAddDomain = ref(false)
 const showAddTarget = ref(false)
@@ -467,6 +476,7 @@ async function refreshLogs() {
     const data = await $fetch('/api/logs')
     logs.value = data.logs || []
     debugEnabled.value = data.enabled
+    traceEnabled.value = data.traceEnabled
   } catch (e) {
     console.error('Failed to load logs:', e)
   }
@@ -482,6 +492,19 @@ async function toggleDebug() {
   } catch (e) {
     console.error('Failed to toggle debug:', e)
     debugEnabled.value = !debugEnabled.value // revert on error
+  }
+}
+
+async function toggleTrace() {
+  try {
+    await $fetch('/api/logs', {
+      method: 'POST',
+      body: { traceEnabled: traceEnabled.value }
+    })
+    await refreshLogs()
+  } catch (e) {
+    console.error('Failed to toggle trace:', e)
+    traceEnabled.value = !traceEnabled.value // revert on error
   }
 }
 
@@ -504,7 +527,17 @@ async function testLog() {
       method: 'POST',
       body: { test: true }
     })
-    await refreshLogs()
+    
+    // Show simple feedback
+    const btn = document.activeElement
+    const originalText = btn.innerHTML
+    btn.innerHTML = '<span class="text-emerald-400">OK</span>'
+    
+    setTimeout(async () => {
+      await refreshLogs()
+      btn.innerHTML = originalText
+    }, 1000)
+    
   } catch (e) {
     console.error('Failed to write test log:', e)
     alert('Failed to write test log: ' + e.message)
