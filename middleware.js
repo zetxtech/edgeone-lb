@@ -995,7 +995,12 @@ export async function middleware(context) {
       isWebSocket,
       upgradeHeader: request.headers.get("Upgrade"),
       candidatesCount: candidates.length,
-      clientIP: request.headers.get('CF-Connecting-IP') || request.headers.get('X-Real-IP')
+      clientIP: request.headers.get('CF-Connecting-IP') || request.headers.get('X-Real-IP'),
+      sortedCandidates: candidates.map(c => ({
+        host: c.target.host,
+        status: c.status,
+        latency: c.latency
+      }))
     });
 
     // WebSocket requests: delegate to Node Functions WebSocket proxy handler.
@@ -1091,11 +1096,14 @@ export async function middleware(context) {
         
         if (result && result.ok) {
           await updateMetrics(cache, item.target.host, 'healthy', duration);
-          
+      
           await debugLog('Connection successful', {
             target: item.target.host,
             duration,
-            status: result.response.status
+            status: result.response.status,
+            contentLength: result.response.headers.get('content-length'),
+            contentType: result.response.headers.get('content-type'),
+            transferEncoding: result.response.headers.get('transfer-encoding')
           });
 
           // WebSocket: return original response directly without modification
@@ -1158,6 +1166,11 @@ export async function middleware(context) {
     }
 
     if (response) {
+      await debugLog('Returning response to client', {
+        status: response.status,
+        hasBody: !!response.body,
+        headers: Object.fromEntries(response.headers)
+      });
       return response;
     }
 
