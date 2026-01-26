@@ -83,6 +83,8 @@ function createTimeoutSignal(timeoutMs) {
 // =================================================================
 async function judgeAndMaybeTransformResponse({ resp, target, isWebSocket, originalUrl }) {
   const status = resp.status;
+  const statusText = resp.statusText;
+  const targetInfo = { host: target.host, type: target.type };
 
   // WebSocket Validation
   if (isWebSocket) {
@@ -91,14 +93,14 @@ async function judgeAndMaybeTransformResponse({ resp, target, isWebSocket, origi
     }
     
     if (target.type === "frp" && (status === 404 || status === 525 || status === 530)) {
-      return { ok: false, reason: `FRP returned ${status} for WebSocket` };
+      return { ok: false, reason: `FRP returned ${status} for WebSocket`, status, statusText, target: targetInfo };
     }
     if (target.type === "tunnel" && (status === 530 || status === 502)) {
-      return { ok: false, reason: `Tunnel returned ${status} for WebSocket` };
+      return { ok: false, reason: `Tunnel returned ${status} for WebSocket`, status, statusText, target: targetInfo };
     }
     
     if (status >= 500 || (status >= 400 && status !== 401 && status !== 403)) {
-      return { ok: false, reason: `WS Status ${status}` };
+      return { ok: false, reason: `WS Status ${status}`, status, statusText, target: targetInfo };
     }
     
     return { ok: true, response: resp };
@@ -106,11 +108,11 @@ async function judgeAndMaybeTransformResponse({ resp, target, isWebSocket, origi
 
   // HTTP Validation
   if (target.type === "tunnel" && (status === 530 || status === 502)) {
-    return { ok: false, reason: `Tunnel returned ${status}` };
+    return { ok: false, reason: `Tunnel returned ${status}`, status, statusText, target: targetInfo };
   }
 
   if (target.type === "frp" && (status === 525 || status === 530)) {
-    return { ok: false, reason: "FRP returned 525 (SSL Handshake Failed)" };
+    return { ok: false, reason: "FRP returned 525 (SSL Handshake Failed)", status, statusText, target: targetInfo };
   }
 
   // FRP Signature Inspection for 404 responses
@@ -149,12 +151,12 @@ async function judgeAndMaybeTransformResponse({ resp, target, isWebSocket, origi
       }
     } catch (e) {
       try { await reader.cancel(); } catch {}
-      return { ok: false, reason: "Stream read error" };
+      return { ok: false, reason: "Stream read error", status, statusText, target: targetInfo, error: e.message };
     }
 
     if (signatureFound) {
       try { await reader.cancel(); } catch {}
-      return { ok: false, reason: "FRP 404 signature matched" };
+      return { ok: false, reason: "FRP 404 signature matched", status, statusText, target: targetInfo };
     }
 
     if (chunks.length === 0) {
@@ -343,7 +345,24 @@ async function probeTarget(target, request, originalUrl, isWebSocket, signal) {
       signal: signal
     });
 
-    const resp = await fetch(upstreamReq);
+    let resp;
+    try {
+      resp = await fetch(upstreamReq);
+    } catch (fetchError) {
+      return {
+        ok: false,
+        reason: `Fetch failed: ${fetchError.message}`,
+        errorDetail: {
+          name: fetchError.name,
+          message: fetchError.message,
+          stack: fetchError.stack,
+          target: target.host,
+          upstreamUrl: upstreamUrl.toString(),
+          originalUrl: originalUrl.toString(),
+          method: request.method
+        }
+      };
+    }
 
     if (isWebSocket) {
       // Strategy 1: If runtime provides resp.webSocket (Cloudflare Workers style)
@@ -447,7 +466,14 @@ async function probeTarget(target, request, originalUrl, isWebSocket, signal) {
     });
 
     if (!judged.ok) {
-      return { ok: false, reason: judged.reason };
+      return { 
+        ok: false, 
+        reason: judged.reason,
+        status: judged.status,
+        statusText: judged.statusText,
+        target: judged.target,
+        error: judged.error
+      };
     }
 
     const headers = new Headers(judged.response.headers);
@@ -465,7 +491,17 @@ async function probeTarget(target, request, originalUrl, isWebSocket, signal) {
 
   } catch (e) {
     if (e.name === 'AbortError') throw e;
-    return { ok: false, reason: e.message };
+    return { 
+      ok: false, 
+      reason: e.message,
+      errorDetail: {
+        name: e.name,
+        message: e.message,
+        stack: e.stack,
+        target: target.host,
+        url: originalUrl.toString()
+      }
+    };
   }
 }
 
@@ -1051,7 +1087,10 @@ export async function middleware(context) {
           await debugLog('Connection failed', {
             target: item.target.host,
             duration,
-            reason: result?.reason
+            reason: result?.reason,
+            errorDetail: result?.errorDetail,
+            requestUrl: url.toString(),
+            method: request.method
           });
           await updateMetrics(cache, item.target.host, 'unhealthy', duration, result?.reason);
         }
@@ -1063,7 +1102,10 @@ export async function middleware(context) {
           target: item.target.host,
           duration,
           error: reason,
-          stack: e.stack
+          errorName: e.name,
+          stack: e.stack,
+          requestUrl: url.toString(),
+          method: request.method
         });
         
         await updateMetrics(cache, item.target.host, 'unhealthy', duration, reason);
@@ -1099,16 +1141,23 @@ export async function middleware(context) {
   } catch (error) {
     console.error('Load balancer error:', error);
     
-    await debugLog('Critical Internal Error', {
+    const errorContext = {
       message: error.message,
+      name: error.name,
       stack: error.stack,
-      url: request.url
-    });
+      url: request.url,
+      method: request.method,
+      hostname: url?.hostname,
+      pathname: url?.pathname,
+      timestamp: new Date().toISOString(),
+      cause: error.cause ? String(error.cause) : null
+    };
+    
+    await debugLog('Critical Internal Error', errorContext);
 
     return new Response(JSON.stringify({ 
       error: 'Internal server error', 
-      message: error.message,
-      stack: error.stack
+      ...errorContext
     }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' }
