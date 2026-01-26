@@ -1119,6 +1119,26 @@ export async function middleware(context) {
           responseHeaders.set('X-LB-Powered-By', 'EdgeOne-LB');
           responseHeaders.set('X-LB-Platform', rule.platform || 'edgeone');
           
+          // Check if this is a streaming response (SSE or chunked transfer)
+          const contentType = result.response.headers.get('content-type') || '';
+          const isSSE = contentType.includes('text/event-stream');
+          const isChunked = (result.response.headers.get('transfer-encoding') || '').toLowerCase().includes('chunked');
+          
+          if (isSSE || isChunked) {
+            // For SSE/streaming responses, ensure proper headers and pass through body directly
+            responseHeaders.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+            responseHeaders.set('Connection', 'keep-alive');
+            responseHeaders.delete('Content-Length');
+            
+            await debugLog('Streaming response detected', {
+           target: item.target.host,
+           contentType,
+              isSSE,
+              isChunked
+            });
+          }
+          
+          // Pass through the response body stream directly
           response = new Response(result.response.body, {
             status: result.response.status,
             statusText: result.response.statusText,
