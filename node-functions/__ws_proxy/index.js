@@ -139,6 +139,8 @@ async function onRequest(context) {
     const originalSearch = (url.searchParams.get('search') || '').trim();
     const originalProto = (url.searchParams.get('proto') || '').trim();
 
+    console.log(`[WS-Proxy] Received WebSocket upgrade request: target=${targetHost}, path=${originalPath}, proto=${originalProto}`);
+
     if (!targetHost) {
       return new Response(JSON.stringify({
         error: 'Missing target parameter',
@@ -150,6 +152,16 @@ async function onRequest(context) {
     }
 
     const upstreamUrl = buildUpstreamWsUrl(targetHost, request.url, originalPath, originalSearch, originalProto);
+
+    console.log(`[WS-Proxy] Built upstream URL: ${upstreamUrl}`);
+    
+    // Log before returning websocket handler (this log may be cut off in serverless)
+    await remoteLog('WebSocket upgrade accepted', { 
+      target: targetHost, 
+      upstreamUrl, 
+      originalPath, 
+      originalProto 
+    });
 
     // EdgeOne Node Functions websocket handler
     return { websocket: createProxyHandler(upstreamUrl, targetHost) };

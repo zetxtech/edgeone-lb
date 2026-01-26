@@ -992,6 +992,8 @@ export async function middleware(context) {
       hostname,
       path: url.pathname,
       method: request.method,
+      isWebSocket,
+      upgradeHeader: request.headers.get("Upgrade"),
       candidatesCount: candidates.length,
       clientIP: request.headers.get('CF-Connecting-IP') || request.headers.get('X-Real-IP')
     });
@@ -1000,9 +1002,10 @@ export async function middleware(context) {
     // Middleware runtime does not provide WebSocketPair, and rewrite() does not keep WS upgraded.
     // Node Functions do NOT have access to KV, so we pass the selected target directly via query params.
     if (isWebSocket) {
-      // Find the first healthy or unknown target
-      const wsTarget = candidates.find(c => c.status === 'healthy' || c.status === 'unknown')?.target 
-                    || candidates[0]?.target;
+      // candidates is already sorted by: 1) health status (healthy < unknown < unhealthy), 2) latency (ASC)
+      // So candidates[0] is always the best choice (healthiest with lowest latency)
+      const wsCandidate = candidates[0];
+      const wsTarget = wsCandidate?.target;
       
       if (!wsTarget) {
         await debugLog('WebSocket: No target available', { hostname, candidatesCount: candidates.length });
@@ -1012,12 +1015,34 @@ export async function middleware(context) {
         });
       }
 
+      // Log all candidates for debugging
+      await debugLog('WebSocket: All candidates', {
+        hostname,
+        candidates: candidates.map(c => ({
+          host: c.target.host,
+          type: c.target.type,
+          status: c.status,
+          latency: c.latency,
+          lastChecked: c.lastChecked
+        }))
+      });
+
+      // Warn if selected target is unhealthy
+      if (wsCandidate.status === 'unhealthy') {
+        await debugLog('WebSocket: WARNING - Selected unhealthy target', {
+          target: wsTarget.host,
+          reason: 'All targets are unhealthy, using best available'
+        });
+      }
+
       await debugLog('WebSocket request detected (delegating to Node Function)', {
         url: url.toString(),
         hostname,
         path: url.pathname,
         candidatesCount: candidates.length,
-        selectedTarget: wsTarget.host
+        selectedTarget: wsTarget.host,
+        selectedStatus: wsCandidate.status,
+        selectedLatency: wsCandidate.latency
       });
 
       const proxyUrl = new URL(url);
@@ -1031,6 +1056,15 @@ export async function middleware(context) {
       // In some environments, request.url may be represented as http even when the external scheme is https/wss.
       // Force internal rewrite URL to https to avoid platform handshake issues.
       proxyUrl.protocol = 'https:';
+
+      await debugLog('WebSocket rewrite URL', {
+        originalUrl: url.toString(),
+        proxyUrl: proxyUrl.toString(),
+        target: wsTarget.host,
+        targetType: wsTarget.type,
+        candidateStatus: wsCandidate.status,
+        candidateLatency: wsCandidate.latency
+      });
 
       return rewrite(proxyUrl.toString());
     }
