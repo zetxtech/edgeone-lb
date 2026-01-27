@@ -62,6 +62,16 @@ function buildUpstreamWsUrl(targetHost, originalUrl, originalPath, originalSearc
   return base.toString();
 }
 
+function parseSearchParams(search) {
+  try {
+    const s = String(search || '').trim();
+    if (!s) return new URLSearchParams();
+    return new URLSearchParams(s.startsWith('?') ? s.slice(1) : s);
+  } catch {
+    return new URLSearchParams();
+  }
+}
+
 const PROXY_VERSION = 'ws-proxy-v3';
 
 // Helper to send logs to Edge Functions KV via API
@@ -139,6 +149,13 @@ async function onRequest(context) {
     const originalSearch = (url.searchParams.get('search') || '').trim();
     const originalProto = (url.searchParams.get('proto') || '').trim();
 
+    // Opt-in: let callers ask /__ws_proxy to send a first marker message to client.
+    // Useful for testing whether the request actually went through this proxy.
+    const originalSearchParams = parseSearchParams(originalSearch);
+    const markerEnabled =
+      url.searchParams.get('marker') === '1' ||
+      originalSearchParams.get('eo_ws_proxy_marker') === '1';
+
     console.log(`[WS-Proxy] Received WebSocket upgrade request: target=${targetHost}, path=${originalPath}, proto=${originalProto}`);
 
     if (!targetHost) {
@@ -164,7 +181,7 @@ async function onRequest(context) {
     });
 
     // EdgeOne Node Functions websocket handler
-    return { websocket: createProxyHandler(upstreamUrl, targetHost) };
+    return { websocket: createProxyHandler(upstreamUrl, targetHost, { markerEnabled, originalPath }) };
   } catch (err) {
     const msg = `[WS-Proxy] Internal Error: ${err}`;
     console.error(msg);
@@ -185,7 +202,7 @@ async function onRequest(context) {
   }
 }
 
-function createProxyHandler(upstreamUrl, targetHost) {
+function createProxyHandler(upstreamUrl, targetHost, { markerEnabled = false, originalPath = '' } = {}) {
   let upstream = null;
   let client = null;
   let clientClosed = false;
@@ -234,6 +251,20 @@ function createProxyHandler(upstreamUrl, targetHost) {
   return {
     async onopen(ws, request) {
       client = ws;
+
+      if (markerEnabled) {
+        try {
+          safeSend(client, JSON.stringify({
+            type: 'eo_ws_proxy_marker',
+            ok: true,
+            version: PROXY_VERSION,
+            ts: Date.now(),
+            via: '/__ws_proxy',
+            target: targetHost,
+            path: originalPath || null,
+          }));
+        } catch {}
+      }
 
       upstreamCtor = await resolveWebSocketCtor();
       OPEN_STATE = typeof upstreamCtor?.OPEN === 'number' ? upstreamCtor.OPEN : 1;

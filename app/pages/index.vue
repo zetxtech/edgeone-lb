@@ -132,7 +132,7 @@
             </div>
 
             <div class="text-[10px] text-slate-400 mb-2">
-              Tip: to test through middleware, choose a proxied domain that routes to this admin hostname.
+              Tip: to force one middleware hop, choose a proxied domain whose targets include {{ adminHostname || '(admin host)' }}.
             </div>
 
             <div class="max-h-48 overflow-y-auto custom-scrollbar bg-slate-950/30 rounded border border-slate-800/60">
@@ -192,7 +192,7 @@
             </div>
 
             <div class="text-[10px] text-slate-400 mb-2">
-              Tip: pick a proxied domain and ensure its targets include the admin hostname.
+              Tip: to test the /__ws_proxy path, choose a proxied domain whose targets include {{ adminHostname || '(admin host)' }}.
             </div>
 
             <div class="max-h-48 overflow-y-auto custom-scrollbar bg-slate-950/30 rounded border border-slate-800/60">
@@ -627,10 +627,20 @@ onBeforeUnmount(() => {
 
 const sseUrl = computed(() => {
   const origin = testDomain.value ? `https://${testDomain.value}` : currentOrigin.value
+  if (!origin) return ''
   const url = new URL(`${origin}/api/test/sse`)
   url.searchParams.set('intervalMs', String(sseIntervalMs.value || 1000))
   url.searchParams.set('count', String(sseCount.value || 10))
   return url.toString()
+})
+
+const adminHostname = computed(() => {
+  try {
+    if (!currentOrigin.value) return ''
+    return new URL(currentOrigin.value).hostname
+  } catch {
+    return ''
+  }
 })
 
 const wsUrl = computed(() => {
@@ -639,13 +649,29 @@ const wsUrl = computed(() => {
   const u = new URL(origin)
   u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:'
   u.pathname = '/__ws_backend'
-  u.search = ''
+  // Ask /__ws_proxy (when it is in the path) to send a first marker message.
+  u.search = '?eo_ws_proxy_marker=1'
   return u.toString()
 })
 
 function fillProxyTestDomain() {
   const all = Object.keys(rules.value || {})
-  const picked = all.find((d) => d && d !== 'elb.zetx.tech') || ''
+  const adminHost = adminHostname.value
+
+  const normalizeHost = (h) => String(h || '').split(':')[0]
+  const matchesAdmin = (targetHost) => {
+    if (!adminHost) return false
+    return normalizeHost(targetHost) === normalizeHost(adminHost)
+  }
+
+  const picked = all.find((domain) => {
+    if (!domain) return false
+    if (domain === adminHost) return false
+    const rule = rules.value?.[domain]
+    const targets = Array.isArray(rule?.targets) ? rule.targets : []
+    return targets.some((t) => matchesAdmin(t?.host))
+  }) || ''
+
   testDomain.value = picked
 }
 
