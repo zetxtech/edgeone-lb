@@ -33,36 +33,40 @@ export async function onRequestGet({ request }) {
   const count = parseIntParam(url, 'count', 10, { min: 1, max: 10_000 });
 
   const encoder = new TextEncoder();
-  let timer = null;
-  let index = 0;
+  let cancelled = false;
+
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
   const stream = new ReadableStream({
-    start(controller) {
+    async start(controller) {
       const send = (text) => controller.enqueue(encoder.encode(text));
 
       // Initial comment helps some proxies flush headers.
-      send(`: ok\n\n`);
+      send(`: ok\n`);
+      // Hint the browser to retry faster on disconnects.
+      send(`retry: 1000\n\n`);
       send(`event: open\ndata: ${JSON.stringify({ ok: true, intervalMs, count, ts: Date.now() })}\n\n`);
 
-      timer = setInterval(() => {
-        index += 1;
-        send(`id: ${index}\n`);
-        send(`event: tick\n`);
-        send(`data: ${JSON.stringify({ index, ts: Date.now() })}\n\n`);
+      try {
+        for (let index = 1; index <= count; index += 1) {
+          if (cancelled) break;
+          await sleep(intervalMs);
+          if (cancelled) break;
+          send(`id: ${index}\n`);
+          send(`event: tick\n`);
+          send(`data: ${JSON.stringify({ index, ts: Date.now() })}\n\n`);
+        }
 
-        if (index >= count) {
-          clearInterval(timer);
-          timer = null;
+        if (!cancelled) {
           send(`event: done\ndata: ${JSON.stringify({ ok: true, count, ts: Date.now() })}\n\n`);
           controller.close();
         }
-      }, intervalMs);
+      } catch (e) {
+        controller.error(e);
+      }
     },
     cancel() {
-      if (timer) {
-        clearInterval(timer);
-        timer = null;
-      }
+      cancelled = true;
     },
   });
 
@@ -72,7 +76,6 @@ export async function onRequestGet({ request }) {
       ...buildCorsHeaders(request),
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-cache, no-store, must-revalidate',
-      'Connection': 'keep-alive',
       // Helpful for some reverse proxies; harmless elsewhere.
       'X-Accel-Buffering': 'no',
     },

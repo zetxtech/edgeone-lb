@@ -41,10 +41,31 @@ function sanitizeCloseCode(code) {
 
 const BACKEND_VERSION = 'ws-backend-v1';
 
+// Helper to send logs to Edge Functions KV via API
+async function remoteLog(message, data = null) {
+  try {
+    if (!globalThis.LOG_API_URL) return;
+
+    await fetch(globalThis.LOG_API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        source: 'node-function:ws-backend',
+        message,
+        data,
+      }),
+    });
+  } catch {
+    // Ignore
+  }
+}
+
 async function onRequest(context) {
   const { request } = context;
   const url = new URL(request.url);
   const upgradeHeader = request.headers.get('upgrade');
+
+  globalThis.LOG_API_URL = `${url.origin}/api/log-ingest`;
 
   if (upgradeHeader?.toLowerCase() !== 'websocket') {
     const diag = url.searchParams.get('diag') === '1';
@@ -73,6 +94,12 @@ async function onRequest(context) {
   const intervalMs = parseIntParam(url, 'intervalMs', 0, { min: 0, max: 60_000 });
   const count = parseIntParam(url, 'count', 0, { min: 0, max: 10_000 });
 
+  remoteLog('WebSocket upgrade accepted', {
+    url: request.url,
+    intervalMs,
+    count,
+  }).catch(() => {});
+
   return {
     websocket: createEchoHandler({ intervalMs, count, requestUrl: request.url }),
   };
@@ -91,6 +118,7 @@ function createEchoHandler({ intervalMs, count, requestUrl }) {
 
   return {
     async onopen(ws) {
+      remoteLog('Client connected', { url: requestUrl }).catch(() => {});
       safeSend(ws, JSON.stringify({
         type: 'hello',
         ok: true,
@@ -119,6 +147,7 @@ function createEchoHandler({ intervalMs, count, requestUrl }) {
         payload = payload?.toString?.() ?? String(payload);
       }
 
+      remoteLog('Client message', { isBinary: !!isBinary, size: typeof payload === 'string' ? payload.length : null }).catch(() => {});
       safeSend(ws, JSON.stringify({
         type: 'echo',
         ts: Date.now(),
@@ -129,11 +158,13 @@ function createEchoHandler({ intervalMs, count, requestUrl }) {
 
     async onclose(ws, code, reason) {
       stopTimer();
+      remoteLog('Client closed', { code, reason: reason?.toString?.() || '' }).catch(() => {});
       safeClose(ws, sanitizeCloseCode(code), reason?.toString?.() || '');
     },
 
     async onerror() {
       stopTimer();
+      remoteLog('Client error', {}).catch(() => {});
     },
   };
 }
