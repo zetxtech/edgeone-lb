@@ -1,6 +1,6 @@
 # EdgeOne Load Balancer Admin Panel
 
-基于 EdgeOne Pages 的负载均衡管理面板，支持多域名 CNAME 到同一 Pages 项目，通过 Middleware 区分管理端和代理端。
+基于 EdgeOne Pages 的负载均衡管理面板，通过 Middleware 区分管理端和代理端。
 
 ## 架构
 
