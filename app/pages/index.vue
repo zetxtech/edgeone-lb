@@ -69,6 +69,142 @@
         </button>
       </div>
 
+      <!-- Streaming / WebSocket Test -->
+      <div class="bg-slate-800/50 backdrop-blur-sm rounded-xl p-5 border border-slate-700/50 mb-6">
+        <div class="flex items-center justify-between mb-4">
+          <div class="flex items-center gap-2">
+            <svg class="w-5 h-5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+            </svg>
+            <span class="text-sm font-medium text-slate-300">Streaming / WebSocket Test</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <select v-model="testDomain" class="bg-slate-900/50 border border-slate-700/50 text-slate-200 text-xs rounded-lg px-2.5 py-2">
+              <option value="">(Use admin origin)</option>
+              <option v-for="d in Object.keys(rules)" :key="d" :value="d">{{ d }}</option>
+            </select>
+            <button
+              @click="fillProxyTestDomain"
+              class="px-3 py-2 rounded-lg text-xs bg-slate-700/50 hover:bg-slate-600/50 text-slate-200 border border-slate-600/50"
+              title="Pick a non-admin domain automatically"
+            >
+              Auto Pick
+            </button>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <!-- SSE -->
+          <div class="bg-slate-900/50 rounded-lg border border-slate-700/30 p-4">
+            <div class="flex items-center justify-between mb-3">
+              <div class="text-xs font-medium text-slate-400">SSE (EventSource)</div>
+              <div class="flex items-center gap-2">
+                <button
+                  v-if="!sseRunning"
+                  @click="startSse"
+                  class="px-3 py-1.5 rounded-md text-xs bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 border border-emerald-500/30"
+                >
+                  Start
+                </button>
+                <button
+                  v-else
+                  @click="stopSse"
+                  class="px-3 py-1.5 rounded-md text-xs bg-red-500/10 text-red-300 hover:bg-red-500/20 border border-red-500/30"
+                >
+                  Stop
+                </button>
+                <button
+                  @click="clearSse"
+                  class="px-3 py-1.5 rounded-md text-xs bg-slate-700/50 text-slate-300 hover:bg-slate-600/50 border border-slate-600/30"
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+
+            <div class="text-[10px] text-slate-500 font-mono mb-2 break-all">{{ sseUrl }}</div>
+
+            <div class="flex items-center gap-2 mb-3">
+              <label class="text-[10px] text-slate-500">intervalMs</label>
+              <input v-model.number="sseIntervalMs" type="number" min="100" max="60000" class="w-24 bg-slate-800/50 border border-slate-700/50 text-slate-200 text-xs rounded px-2 py-1" />
+              <label class="text-[10px] text-slate-500">count</label>
+              <input v-model.number="sseCount" type="number" min="1" max="10000" class="w-24 bg-slate-800/50 border border-slate-700/50 text-slate-200 text-xs rounded px-2 py-1" />
+            </div>
+
+            <div class="text-[10px] text-slate-400 mb-2">
+              Tip: to test through middleware, choose a proxied domain that routes to this admin hostname.
+            </div>
+
+            <div class="max-h-48 overflow-y-auto custom-scrollbar bg-slate-950/30 rounded border border-slate-800/60">
+              <div v-if="sseLines.length === 0" class="p-3 text-xs text-slate-500">No events</div>
+              <div v-else class="p-3 space-y-1">
+                <div v-for="(l, idx) in sseLines" :key="idx" class="text-[10px] text-slate-300 font-mono break-all">{{ l }}</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- WebSocket -->
+          <div class="bg-slate-900/50 rounded-lg border border-slate-700/30 p-4">
+            <div class="flex items-center justify-between mb-3">
+              <div class="text-xs font-medium text-slate-400">WebSocket (via middleware rewrite)</div>
+              <div class="flex items-center gap-2">
+                <button
+                  v-if="!wsConnected"
+                  @click="connectWs"
+                  class="px-3 py-1.5 rounded-md text-xs bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 border border-emerald-500/30"
+                >
+                  Connect
+                </button>
+                <button
+                  v-else
+                  @click="disconnectWs"
+                  class="px-3 py-1.5 rounded-md text-xs bg-red-500/10 text-red-300 hover:bg-red-500/20 border border-red-500/30"
+                >
+                  Disconnect
+                </button>
+                <button
+                  @click="clearWs"
+                  class="px-3 py-1.5 rounded-md text-xs bg-slate-700/50 text-slate-300 hover:bg-slate-600/50 border border-slate-600/30"
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+
+            <div class="text-[10px] text-slate-500 font-mono mb-2 break-all">{{ wsUrl }}</div>
+
+            <div class="flex items-center gap-2 mb-3">
+              <input
+                v-model="wsPayload"
+                type="text"
+                placeholder="message"
+                class="flex-1 bg-slate-800/50 border border-slate-700/50 text-slate-200 text-xs rounded px-2 py-1"
+                @keyup.enter="sendWs"
+              />
+              <button
+                @click="sendWs"
+                :disabled="!wsConnected"
+                class="px-3 py-1.5 rounded-md text-xs border transition-all"
+                :class="wsConnected ? 'bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20 border-cyan-500/30' : 'bg-slate-800/30 text-slate-500 border-slate-700/30 cursor-not-allowed'"
+              >
+                Send
+              </button>
+            </div>
+
+            <div class="text-[10px] text-slate-400 mb-2">
+              Tip: pick a proxied domain and ensure its targets include the admin hostname.
+            </div>
+
+            <div class="max-h-48 overflow-y-auto custom-scrollbar bg-slate-950/30 rounded border border-slate-800/60">
+              <div v-if="wsLines.length === 0" class="p-3 text-xs text-slate-500">No messages</div>
+              <div v-else class="p-3 space-y-1">
+                <div v-for="(l, idx) in wsLines" :key="idx" class="text-[10px] text-slate-300 font-mono break-all">{{ l }}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Debug Logs Section -->
       <div class="bg-slate-800/50 backdrop-blur-sm rounded-xl p-5 border border-slate-700/50 mb-6">
         <div class="flex items-center justify-between mb-4">
@@ -443,6 +579,19 @@ const logs = ref([])
 const debugEnabled = ref(false)
 const traceEnabled = ref(false)
 
+const testDomain = ref('')
+
+const sseIntervalMs = ref(1000)
+const sseCount = ref(10)
+const sseLines = ref([])
+const sseRunning = ref(false)
+let sseSource = null
+
+const wsPayload = ref('hello')
+const wsLines = ref([])
+const wsConnected = ref(false)
+let wsClient = null
+
 const showAddDomain = ref(false)
 const showAddTarget = ref(false)
 const editingDomain = ref(null)
@@ -470,6 +619,132 @@ onMounted(async () => {
   await loadRules()
   await refreshLogs()
 })
+
+onBeforeUnmount(() => {
+  stopSse()
+  disconnectWs()
+})
+
+const sseUrl = computed(() => {
+  const origin = testDomain.value ? `https://${testDomain.value}` : currentOrigin.value
+  const url = new URL(`${origin}/api/test/sse`)
+  url.searchParams.set('intervalMs', String(sseIntervalMs.value || 1000))
+  url.searchParams.set('count', String(sseCount.value || 10))
+  return url.toString()
+})
+
+const wsUrl = computed(() => {
+  const origin = testDomain.value ? `https://${testDomain.value}` : currentOrigin.value
+  if (!origin) return ''
+  const u = new URL(origin)
+  u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:'
+  u.pathname = '/__ws_backend'
+  u.search = ''
+  return u.toString()
+})
+
+function fillProxyTestDomain() {
+  const all = Object.keys(rules.value || {})
+  const picked = all.find((d) => d && d !== 'elb.zetx.tech') || ''
+  testDomain.value = picked
+}
+
+function pushLine(listRef, line, max = 200) {
+  const next = [line, ...listRef.value]
+  listRef.value = next.slice(0, max)
+}
+
+function clearSse() {
+  sseLines.value = []
+}
+
+function stopSse() {
+  try {
+    sseSource?.close?.()
+  } catch {}
+  sseSource = null
+  sseRunning.value = false
+}
+
+function startSse() {
+  if (!process.client) return
+  stopSse()
+  clearSse()
+
+  const url = sseUrl.value
+  if (!url) return
+
+  sseSource = new EventSource(url)
+  sseRunning.value = true
+
+  sseSource.onopen = () => {
+    pushLine(sseLines, `open ${new Date().toISOString()}`)
+  }
+
+  sseSource.onerror = () => {
+    pushLine(sseLines, `error ${new Date().toISOString()}`)
+  }
+
+  sseSource.addEventListener('tick', (ev) => {
+    pushLine(sseLines, `tick ${ev?.data || ''}`)
+  })
+
+  sseSource.addEventListener('done', (ev) => {
+    pushLine(sseLines, `done ${ev?.data || ''}`)
+    stopSse()
+  })
+}
+
+function clearWs() {
+  wsLines.value = []
+}
+
+function disconnectWs() {
+  try {
+    wsClient?.close?.(1000, 'bye')
+  } catch {}
+  wsClient = null
+  wsConnected.value = false
+}
+
+function connectWs() {
+  if (!process.client) return
+  disconnectWs()
+  clearWs()
+
+  const url = wsUrl.value
+  if (!url) return
+
+  wsClient = new WebSocket(url)
+
+  wsClient.onopen = () => {
+    wsConnected.value = true
+    pushLine(wsLines, `open ${new Date().toISOString()}`)
+  }
+
+  wsClient.onclose = (ev) => {
+    wsConnected.value = false
+    pushLine(wsLines, `close code=${ev.code} reason=${ev.reason || ''}`)
+  }
+
+  wsClient.onerror = () => {
+    pushLine(wsLines, `error ${new Date().toISOString()}`)
+  }
+
+  wsClient.onmessage = (ev) => {
+    pushLine(wsLines, `msg ${String(ev.data)}`)
+  }
+}
+
+function sendWs() {
+  if (!wsConnected.value || !wsClient) return
+  try {
+    wsClient.send(wsPayload.value)
+    pushLine(wsLines, `sent ${wsPayload.value}`)
+  } catch (e) {
+    pushLine(wsLines, `send_failed ${e?.message || String(e)}`)
+  }
+}
 
 async function refreshLogs() {
   try {
