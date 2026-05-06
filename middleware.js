@@ -225,6 +225,29 @@ function handleRedirect(response, originalUrl) {
   return response;
 }
 
+function sanitizeProxyResponseHeaders(headers) {
+  const sanitized = new Headers(headers);
+  const hopByHopHeaders = [
+    'connection',
+    'keep-alive',
+    'proxy-authenticate',
+    'proxy-authorization',
+    'te',
+    'trailer',
+    'transfer-encoding',
+    'upgrade',
+  ];
+
+  for (const header of hopByHopHeaders) {
+    sanitized.delete(header);
+  }
+
+  sanitized.delete('content-length');
+  sanitized.delete('content-encoding');
+
+  return sanitized;
+}
+
 // Update metrics cache and KV storage
 async function updateMetrics(cache, host, status, latency, reason = null) {
   const key = new Request(`https://${host}/_metric`);
@@ -476,7 +499,7 @@ async function probeTarget(target, request, originalUrl, isWebSocket, signal) {
       };
     }
 
-    const headers = new Headers(judged.response.headers);
+    const headers = sanitizeProxyResponseHeaders(judged.response.headers);
     headers.set('X-LB-Backend', upstreamUrl.hostname);
 
     return { 
@@ -1114,7 +1137,7 @@ export async function middleware(context) {
           }
           
           // HTTP: Add custom headers
-          const responseHeaders = new Headers(result.response.headers);
+          const responseHeaders = sanitizeProxyResponseHeaders(result.response.headers);
           responseHeaders.set('X-LB-Backend', item.target.host);
           responseHeaders.set('X-LB-Powered-By', 'EdgeOne-LB');
           responseHeaders.set('X-LB-Platform', rule.platform || 'edgeone');

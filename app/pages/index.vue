@@ -591,6 +591,7 @@ const wsPayload = ref('hello')
 const wsLines = ref([])
 const wsConnected = ref(false)
 let wsClient = null
+let wsPingTimer = null
 
 const showAddDomain = ref(false)
 const showAddTarget = ref(false)
@@ -726,6 +727,10 @@ function clearWs() {
 }
 
 function disconnectWs() {
+  if (wsPingTimer) {
+    clearInterval(wsPingTimer)
+    wsPingTimer = null
+  }
   try {
     wsClient?.close?.(1000, 'bye')
   } catch {}
@@ -746,11 +751,30 @@ function connectWs() {
   wsClient.onopen = () => {
     wsConnected.value = true
     pushLine(wsLines, `open ${new Date().toISOString()}`)
+
+    // Send first message immediately to verify data path.
+    if (wsPayload.value) {
+      try {
+        wsClient.send(wsPayload.value)
+        pushLine(wsLines, `sent ${wsPayload.value}`)
+      } catch {}
+    }
+
+    // Keepalive to avoid idle close (platform may enforce a short idle timeout).
+    wsPingTimer = setInterval(() => {
+      try {
+        wsClient?.send?.('ping')
+      } catch {}
+    }, 20_000)
   }
 
   wsClient.onclose = (ev) => {
     wsConnected.value = false
     pushLine(wsLines, `close code=${ev.code} reason=${ev.reason || ''}`)
+    if (wsPingTimer) {
+      clearInterval(wsPingTimer)
+      wsPingTimer = null
+    }
   }
 
   wsClient.onerror = () => {
@@ -758,7 +782,12 @@ function connectWs() {
   }
 
   wsClient.onmessage = (ev) => {
-    pushLine(wsLines, `msg ${String(ev.data)}`)
+    const data = String(ev.data)
+    if (data.includes('"type":"eo_ws_proxy_marker"')) {
+      pushLine(wsLines, `marker ${data}`)
+      return
+    }
+    pushLine(wsLines, `msg ${data}`)
   }
 }
 

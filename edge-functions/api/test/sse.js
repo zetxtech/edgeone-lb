@@ -29,8 +29,26 @@ export async function onRequestOptions({ request }) {
 // GET /api/test/sse?intervalMs=1000&count=10
 export async function onRequestGet({ request }) {
   const url = new URL(request.url);
+  const diag = url.searchParams.get('diag') === '1';
   const intervalMs = parseIntParam(url, 'intervalMs', 1000, { min: 100, max: 60_000 });
   const count = parseIntParam(url, 'count', 10, { min: 1, max: 10_000 });
+
+  if (diag) {
+    return new Response(JSON.stringify({
+      ok: true,
+      mode: 'diag',
+      intervalMs,
+      count,
+      ts: Date.now(),
+    }, null, 2), {
+      status: 200,
+      headers: {
+        ...buildCorsHeaders(request),
+        'Content-Type': 'application/json; charset=utf-8',
+        'Cache-Control': 'no-store',
+      },
+    });
+  }
 
   const encoder = new TextEncoder();
   let cancelled = false;
