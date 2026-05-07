@@ -12,6 +12,17 @@ const DEBUG_HEADER = 'EdgeoneLBDebugger';
 const GENERIC_ERROR_RESPONSE_BODY = {
   error: 'Internal server error',
 };
+const DEBUG_LOG_INDEX_KEY = 'debug-log:index';
+const DEBUG_LOG_KEY_PREFIX = 'debug-log:';
+const DEBUG_LOG_RETENTION_SECONDS = 60 * 60 * 24 * 7;
+const DEBUG_LOG_MAX_RECORDS = 50;
+const LOG_HEADER_VALUE_LIMIT = 2048;
+const REDACTED_LOG_HEADERS = new Set([
+  'authorization',
+  'proxy-authorization',
+  'cookie',
+  'set-cookie',
+]);
 
 // =================================================================
 // Utility: Create AbortSignal with timeout (compatibility wrapper)
@@ -54,7 +65,41 @@ function extractErrorStatus(error, fallback = 500) {
 }
 
 function shouldExposeDebugInfo(request) {
-  return request.headers.has(DEBUG_HEADER);
+  const userAgent = request.headers.get('user-agent') || '';
+  return request.headers.has(DEBUG_HEADER) || userAgent.includes(DEBUG_HEADER);
+}
+
+function createDebugLogId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function truncateLogText(value, maxLength = LOG_HEADER_VALUE_LIMIT) {
+  const text = String(value ?? '');
+  if (text.length <= maxLength) {
+    return text;
+  }
+
+  return `${text.slice(0, maxLength)}…[truncated]`;
+}
+
+function serializeHeadersForLog(headers) {
+  const result = {};
+  if (!headers) {
+    return result;
+  }
+
+  for (const [key, value] of headers.entries()) {
+    const lowerKey = key.toLowerCase();
+    result[key] = REDACTED_LOG_HEADERS.has(lowerKey)
+      ? '[Redacted]'
+      : truncateLogText(value);
+  }
+
+  return result;
 }
 
 function serializeLogValue(value, depth = 0) {
@@ -123,6 +168,59 @@ function createJsonErrorResponse(status, payload, logs = [], exposeDebugInfo = f
   return new Response(JSON.stringify(responsePayload, null, 2), {
     status,
     headers: { 'Content-Type': 'application/json' }
+  });
+}
+
+function classifyResponseStatus(status) {
+  if (!Number.isInteger(status)) return 'unknown';
+  if (status >= 500) return 'server-error';
+  if (status >= 400) return 'client-error';
+  if (status >= 300) return 'redirect';
+  if (status >= 200) return 'success';
+  return 'unknown';
+}
+
+async function persistDebugLogRecord(record) {
+  if (typeof lb_kv === 'undefined') {
+    return;
+  }
+
+  const normalizedRecord = {
+    ...record,
+    id: record.id || createDebugLogId(),
+  };
+  const storageKey = `${DEBUG_LOG_KEY_PREFIX}${normalizedRecord.id}`;
+  const indexEntry = {
+    id: normalizedRecord.id,
+    createdAt: normalizedRecord.createdAt,
+    completedAt: normalizedRecord.completedAt,
+    phase: normalizedRecord.phase,
+    outcome: normalizedRecord.outcome,
+    request: {
+      method: normalizedRecord.request?.method || null,
+      url: normalizedRecord.request?.url || null,
+      hostname: normalizedRecord.request?.hostname || null,
+      pathname: normalizedRecord.request?.pathname || null,
+    },
+    response: {
+      status: normalizedRecord.response?.status ?? null,
+      statusText: normalizedRecord.response?.statusText || '',
+    },
+    logCount: Array.isArray(normalizedRecord.logs) ? normalizedRecord.logs.length : 0,
+  };
+
+  await lb_kv.put(storageKey, JSON.stringify(normalizedRecord), {
+    expirationTtl: DEBUG_LOG_RETENTION_SECONDS,
+  });
+
+  const currentIndex = await lb_kv.get(DEBUG_LOG_INDEX_KEY, { type: 'json' }) || [];
+  const nextIndex = [
+    indexEntry,
+    ...currentIndex.filter((entry) => entry?.id !== normalizedRecord.id),
+  ].slice(0, DEBUG_LOG_MAX_RECORDS);
+
+  await lb_kv.put(DEBUG_LOG_INDEX_KEY, JSON.stringify(nextIndex), {
+    expirationTtl: DEBUG_LOG_RETENTION_SECONDS,
   });
 }
 
@@ -286,9 +384,24 @@ function sanitizeProxyResponseHeaders(headers) {
     'transfer-encoding',
     'upgrade',
   ];
+  const platformHeaders = [
+    'cdn-loop',
+    'x-nws-log-uuid',
+  ];
 
   for (const header of hopByHopHeaders) {
     sanitized.delete(header);
+  }
+
+  for (const header of platformHeaders) {
+    sanitized.delete(header);
+  }
+
+  for (const header of Array.from(sanitized.keys())) {
+    const lowerHeader = header.toLowerCase();
+    if (lowerHeader.startsWith('cf-') || lowerHeader.startsWith('eo-pages-')) {
+      sanitized.delete(header);
+    }
   }
 
   sanitized.delete('content-length');
@@ -341,7 +454,7 @@ function buildUpstreamHostHeader(target, protocol) {
   return `${hostname}:${port}`;
 }
 
-function createStreamingProxyResponse(response, injectedHeaders = {}) {
+function createStreamingProxyResponse(response, injectedHeaders = {}, options = {}) {
   const headers = sanitizeProxyResponseHeaders(response.headers);
 
   for (const [key, value] of Object.entries(injectedHeaders)) {
@@ -350,9 +463,48 @@ function createStreamingProxyResponse(response, injectedHeaders = {}) {
     }
   }
 
-  const body = response.body
-    ? response.body.pipeThrough(new TransformStream())
-    : null;
+  let body = null;
+
+  if (response.body) {
+    const reader = response.body.getReader();
+    let settled = false;
+    const settle = (type, detail = undefined) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      if (typeof options.onComplete === 'function') {
+        try {
+          options.onComplete({ type, detail: serializeLogValue(detail) });
+        } catch {}
+      }
+    };
+
+    body = new ReadableStream({
+      async pull(controller) {
+        try {
+          const { done, value } = await reader.read();
+          if (done) {
+            settle('completed');
+            controller.close();
+            return;
+          }
+
+          controller.enqueue(value);
+        } catch (error) {
+          settle('errored', error);
+          controller.error(error);
+        }
+      },
+      async cancel(reason) {
+        try {
+          await reader.cancel(reason);
+        } catch {}
+        settle('canceled', reason);
+      },
+    });
+  }
 
   return new Response(body, {
     status: response.status,
@@ -502,6 +654,16 @@ async function probeTarget(target, request, originalUrl, isWebSocket, signal, ad
       upstreamRequestInit.duplex = 'half';
     }
 
+    if (addLog) {
+      addLog('probe_target_request_ready', {
+        target: target.host,
+        upstreamUrl: upstreamUrl.toString(),
+        method: request.method,
+        hasBody: requestBody !== undefined,
+        headers: serializeHeadersForLog(upstreamHeaders),
+      });
+    }
+
     const upstreamReq = new Request(upstreamUrl, upstreamRequestInit);
 
     let resp;
@@ -544,6 +706,7 @@ async function probeTarget(target, request, originalUrl, isWebSocket, signal, ad
         status: resp.status,
         statusText: resp.statusText,
         hasWebSocket: !!resp.webSocket,
+          headers: serializeHeadersForLog(resp.headers),
       });
     }
 
@@ -774,12 +937,80 @@ async function runBackgroundHealthCheck(candidatesWithStats, healthPath, cache) 
 
 export async function middleware(context) {
   const { request, next, rewrite } = context;
+  const requestStartedAt = Date.now();
   const url = new URL(request.url);
   const hostname = url.hostname;
+  const debugUserAgent = request.headers.get('user-agent') || '';
+  const debugRequestedByHeader = request.headers.has(DEBUG_HEADER);
+  const debugRequestedByUserAgent = debugUserAgent.includes(DEBUG_HEADER);
   const exposeDebugInfo = shouldExposeDebugInfo(request);
+  const debugLogId = exposeDebugInfo ? createDebugLogId() : null;
   let phase = 'init';
   const requestLogs = [];
   const failedAttempts = [];
+  let finalResponseStatus = null;
+  let finalResponseStatusText = '';
+  let requestKind = 'unknown';
+  let deferDebugLogPersistence = false;
+  let debugLogPersistStarted = false;
+  let pendingStreamCompletion = null;
+  const complete = async (responseOrPromise) => {
+    const resolved = await responseOrPromise;
+    finalResponseStatus = resolved?.status ?? null;
+    finalResponseStatusText = resolved?.statusText || '';
+    return resolved;
+  };
+  const resolvePendingStreamCompletion = (streamResult) => {
+    if (!pendingStreamCompletion) {
+      return;
+    }
+
+    pendingStreamCompletion(streamResult);
+    pendingStreamCompletion = null;
+  };
+  const persistDebugLog = () => {
+    if (!exposeDebugInfo || debugLogPersistStarted) {
+      return null;
+    }
+
+    debugLogPersistStarted = true;
+    const completedAt = new Date().toISOString();
+    const logRecord = {
+      id: debugLogId,
+      createdAt: new Date(requestStartedAt).toISOString(),
+      completedAt,
+      durationMs: Date.now() - requestStartedAt,
+      phase,
+      kind: requestKind,
+      outcome: classifyResponseStatus(finalResponseStatus),
+      request: {
+        method: request.method,
+        url: request.url,
+        hostname,
+        pathname: url.pathname,
+        userAgent: debugUserAgent || null,
+        debugRequestedByHeader,
+        debugRequestedByUserAgent,
+        headers: serializeHeadersForLog(request.headers),
+      },
+      response: {
+        status: finalResponseStatus,
+        statusText: finalResponseStatusText,
+      },
+      attempts: failedAttempts,
+      logs: requestLogs,
+    };
+    const persistTask = persistDebugLogRecord(logRecord).catch((persistError) => {
+      console.error('Failed to persist debug logs:', persistError);
+    });
+
+    if (typeof context.waitUntil === 'function') {
+      context.waitUntil(persistTask);
+      return persistTask;
+    }
+
+    return persistTask;
+  };
   const addLog = exposeDebugInfo
     ? (message, detail) => pushRequestLog(requestLogs, phase, message, detail)
     : () => {};
@@ -795,210 +1026,216 @@ export async function middleware(context) {
     method: request.method,
     hostname,
     pathname: url.pathname,
+    userAgent: debugUserAgent || null,
+    headers: serializeHeadersForLog(request.headers),
+    debugRequestedByHeader,
+    debugRequestedByUserAgent,
   });
 
-  // Allow internal WebSocket proxy handler to run (avoid recursion in middleware)
-  if (url.pathname === '/__ws_proxy') {
-    addLog('internal_websocket_proxy_passthrough');
-    return next();
-  }
-
-  // Check if this is the admin panel
-  const isAdmin = ADMIN_HOSTNAMES.includes(hostname) ||
-                  hostname.endsWith('.edgeone.run') || 
-                  hostname.endsWith('.edgeone.site');
-  addLog('request_classified', { isAdmin });
-
-  if (isAdmin) {
-    // Handle special endpoints for admin panel
-    if (url.pathname === '/_trigger_health_check' || url.pathname === '/_health') {
-      try {
-        setPhase('admin_health_entry', 'admin_health_endpoint_requested', {
-          pathname: url.pathname,
-        });
-        if (typeof lb_kv === 'undefined') {
-          addLog('admin_health_kv_missing');
-          return createJsonErrorResponse(503, { 
-            error: 'KV namespace not bound',
-            message: 'Please bind KV namespace with variable name "lb_kv" in EdgeOne Pages settings'
-          }, requestLogs, exposeDebugInfo);
-        }
-
-        addLog('admin_health_read_rules_start');
-        const rules = await lb_kv.get('rules', { type: 'json' }) || {};
-        addLog('admin_health_read_rules_done', {
-          domainCount: Object.keys(rules).length,
-        });
-        const allTargets = [];
-        const domainTargets = {};
-
-        // Collect all targets from all domains
-        for (const [domain, rule] of Object.entries(rules)) {
-          if (rule.targets && rule.targets.length > 0) {
-            domainTargets[domain] = rule.targets;
-            allTargets.push(...rule.targets.map(t => ({ ...t, domain })));
-          }
-        }
-
-        if (allTargets.length === 0) {
-          addLog('admin_health_no_targets_configured', {
-            domains: Object.keys(rules),
-          });
-          return new Response(JSON.stringify({ 
-            message: 'No targets configured in any domain',
-            domains: Object.keys(rules)
-          }), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' }
-          });
-        }
-
-        const cache = await caches.open('cache-host-metrics');
-
-        // Handle /_trigger_health_check
-        if (url.pathname === '/_trigger_health_check') {
-          setPhase('admin_trigger_health_check', 'admin_trigger_health_check_start', {
-            domainCount: Object.keys(rules).length,
-          });
-          // Run health check for all domains
-          for (const [domain, rule] of Object.entries(rules)) {
-            if (rule.targets && rule.targets.length > 0) {
-              const healthPath = rule.healthPath || '/';
-              const candidates = rule.targets.map(t => ({ target: t }));
-              addLog('admin_trigger_health_check_domain', {
-                domain,
-                targetCount: rule.targets.length,
-                healthPath,
-              });
-              await runBackgroundHealthCheck(candidates, healthPath, cache);
-            }
-          }
-
-          // Return status report grouped by domain
-          const statusReport = {};
-          for (const [domain, targets] of Object.entries(domainTargets)) {
-            statusReport[domain] = {};
-            await Promise.all(targets.map(async (t) => {
-              const key = new Request(`https://${t.host}/_metric`);
-              const resp = await cache.match(key);
-              
-              let info = { status: 'pending', latency: null, lastChecked: null, reason: null };
-              
-              // Try Cache API first
-              if (resp) {
-                try { info = await resp.json(); } catch {}
-              } else {
-                // Fallback to KV storage for cross-domain access
-                try {
-                  if (typeof lb_kv !== 'undefined') {
-                    const kvData = await lb_kv.get(`health:${t.host}`, { type: 'json' });
-                    if (kvData) {
-                      info = kvData;
-                    }
-                  }
-                } catch (e) {
-                  console.error('Failed to read health metrics from KV:', e);
-                }
-              }
-
-              statusReport[domain][t.host] = {
-                type: t.type,
-                status: info.status,
-                latency: info.latency === 9999 ? 'TimeOut' : `${info.latency}ms`,
-                last_update: info.lastChecked 
-                  ? new Date(info.lastChecked).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) 
-                  : 'Never',
-                reason: info.reason || 'OK'
-              };
-            }));
-          }
-
-          return new Response(JSON.stringify(statusReport, null, 2), {
-            headers: { 
-              'Content-Type': 'application/json; charset=utf-8',
-              'Access-Control-Allow-Origin': '*'
-            }
-          });
-        }
-
-        // Handle /_health
-        if (url.pathname === '/_health') {
-          setPhase('admin_health_report', 'admin_health_report_start', {
-            domainCount: Object.keys(domainTargets).length,
-          });
-          const statusReport = {};
-          for (const [domain, targets] of Object.entries(domainTargets)) {
-            statusReport[domain] = {};
-            await Promise.all(targets.map(async (t) => {
-              const key = new Request(`https://${t.host}/_metric`);
-              const resp = await cache.match(key);
-              
-              let info = { status: 'pending', latency: null, lastChecked: null };
-              
-              // Try Cache API first
-              if (resp) {
-                try { info = await resp.json(); } catch {}
-              } else {
-                // Fallback to KV storage for cross-domain access
-                try {
-                  if (typeof lb_kv !== 'undefined') {
-                    const kvData = await lb_kv.get(`health:${t.host}`, { type: 'json' });
-                    if (kvData) {
-                      info = kvData;
-                    }
-                  }
-                } catch (e) {
-                  console.error('Failed to read health metrics from KV:', e);
-                }
-              }
-
-              statusReport[domain][t.host] = {
-                type: t.type,
-                status: info.status,
-                latency: info.latency === 9999 ? 'TimeOut' : `${info.latency}ms`,
-                last_update: info.lastChecked 
-                  ? new Date(info.lastChecked).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) 
-                  : 'Never',
-                reason: info.reason || 'OK'
-              };
-            }));
-          }
-
-          return new Response(JSON.stringify(statusReport, null, 2), {
-            headers: { 
-              'Content-Type': 'application/json; charset=utf-8',
-              'Access-Control-Allow-Origin': '*'
-            }
-          });
-        }
-      } catch (error) {
-        console.error('Health check error:', error);
-        const status = extractErrorStatus(error);
-        addLog('admin_health_error', { error });
-        return createJsonErrorResponse(status, { 
-          error: status === 500 ? 'Internal server error' : `HTTP ${status}`,
-          message: error.message 
-        }, requestLogs, exposeDebugInfo);
-      }
+  try {
+    // Allow internal WebSocket proxy handler to run (avoid recursion in middleware)
+    if (url.pathname === '/__ws_proxy') {
+      requestKind = 'internal-websocket-proxy';
+      addLog('internal_websocket_proxy_passthrough');
+      return complete(next());
     }
 
-    // Admin panel request -> pass through to Nuxt
-    addLog('admin_panel_passthrough');
-    return next();
-  }
+    // Check if this is the admin panel
+    const isAdmin = ADMIN_HOSTNAMES.includes(hostname) ||
+                    hostname.endsWith('.edgeone.run') || 
+                    hostname.endsWith('.edgeone.site');
+    requestKind = isAdmin ? 'admin' : 'proxy';
+    addLog('request_classified', { isAdmin });
 
-  // Proxied domain request -> handle load balancing directly in middleware
-  try {
+    if (isAdmin) {
+      // Handle special endpoints for admin panel
+      if (url.pathname === '/_trigger_health_check' || url.pathname === '/_health') {
+        try {
+          setPhase('admin_health_entry', 'admin_health_endpoint_requested', {
+            pathname: url.pathname,
+          });
+          if (typeof lb_kv === 'undefined') {
+            addLog('admin_health_kv_missing');
+            return complete(createJsonErrorResponse(503, { 
+              error: 'KV namespace not bound',
+              message: 'Please bind KV namespace with variable name "lb_kv" in EdgeOne Pages settings'
+            }, requestLogs, exposeDebugInfo));
+          }
+
+          addLog('admin_health_read_rules_start');
+          const rules = await lb_kv.get('rules', { type: 'json' }) || {};
+          addLog('admin_health_read_rules_done', {
+            domainCount: Object.keys(rules).length,
+          });
+          const allTargets = [];
+          const domainTargets = {};
+
+          // Collect all targets from all domains
+          for (const [domain, rule] of Object.entries(rules)) {
+            if (rule.targets && rule.targets.length > 0) {
+              domainTargets[domain] = rule.targets;
+              allTargets.push(...rule.targets.map(t => ({ ...t, domain })));
+            }
+          }
+
+          if (allTargets.length === 0) {
+            addLog('admin_health_no_targets_configured', {
+              domains: Object.keys(rules),
+            });
+            return complete(new Response(JSON.stringify({ 
+              message: 'No targets configured in any domain',
+              domains: Object.keys(rules)
+            }), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' }
+            }));
+          }
+
+          const cache = await caches.open('cache-host-metrics');
+
+          // Handle /_trigger_health_check
+          if (url.pathname === '/_trigger_health_check') {
+            setPhase('admin_trigger_health_check', 'admin_trigger_health_check_start', {
+              domainCount: Object.keys(rules).length,
+            });
+            // Run health check for all domains
+            for (const [domain, rule] of Object.entries(rules)) {
+              if (rule.targets && rule.targets.length > 0) {
+                const healthPath = rule.healthPath || '/';
+                const candidates = rule.targets.map(t => ({ target: t }));
+                addLog('admin_trigger_health_check_domain', {
+                  domain,
+                  targetCount: rule.targets.length,
+                  healthPath,
+                });
+                await runBackgroundHealthCheck(candidates, healthPath, cache);
+              }
+            }
+
+            // Return status report grouped by domain
+            const statusReport = {};
+            for (const [domain, targets] of Object.entries(domainTargets)) {
+              statusReport[domain] = {};
+              await Promise.all(targets.map(async (t) => {
+                const key = new Request(`https://${t.host}/_metric`);
+                const resp = await cache.match(key);
+                
+                let info = { status: 'pending', latency: null, lastChecked: null, reason: null };
+                
+                // Try Cache API first
+                if (resp) {
+                  try { info = await resp.json(); } catch {}
+                } else {
+                  // Fallback to KV storage for cross-domain access
+                  try {
+                    if (typeof lb_kv !== 'undefined') {
+                      const kvData = await lb_kv.get(`health:${t.host}`, { type: 'json' });
+                      if (kvData) {
+                        info = kvData;
+                      }
+                    }
+                  } catch (e) {
+                    console.error('Failed to read health metrics from KV:', e);
+                  }
+                }
+
+                statusReport[domain][t.host] = {
+                  type: t.type,
+                  status: info.status,
+                  latency: info.latency === 999 ? 'TimeOut' : `${info.latency}ms`,
+                  last_update: info.lastChecked 
+                    ? new Date(info.lastChecked).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) 
+                    : 'Never',
+                  reason: info.reason || 'OK'
+                };
+              }));
+            }
+
+            return complete(new Response(JSON.stringify(statusReport, null, 2), {
+              headers: { 
+                'Content-Type': 'application/json; charset=utf-8',
+                'Access-Control-Allow-Origin': '*'
+              }
+            }));
+          }
+
+          // Handle /_health
+          if (url.pathname === '/_health') {
+            setPhase('admin_health_report', 'admin_health_report_start', {
+              domainCount: Object.keys(domainTargets).length,
+            });
+            const statusReport = {};
+            for (const [domain, targets] of Object.entries(domainTargets)) {
+              statusReport[domain] = {};
+              await Promise.all(targets.map(async (t) => {
+                const key = new Request(`https://${t.host}/_metric`);
+                const resp = await cache.match(key);
+                
+                let info = { status: 'pending', latency: null, lastChecked: null };
+                
+                // Try Cache API first
+                if (resp) {
+                  try { info = await resp.json(); } catch {}
+                } else {
+                  // Fallback to KV storage for cross-domain access
+                  try {
+                    if (typeof lb_kv !== 'undefined') {
+                      const kvData = await lb_kv.get(`health:${t.host}`, { type: 'json' });
+                      if (kvData) {
+                        info = kvData;
+                      }
+                    }
+                  } catch (e) {
+                    console.error('Failed to read health metrics from KV:', e);
+                  }
+                }
+
+                statusReport[domain][t.host] = {
+                  type: t.type,
+                  status: info.status,
+                  latency: info.latency === 999 ? 'TimeOut' : `${info.latency}ms`,
+                  last_update: info.lastChecked 
+                    ? new Date(info.lastChecked).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) 
+                    : 'Never',
+                  reason: info.reason || 'OK'
+                };
+              }));
+            }
+
+            return complete(new Response(JSON.stringify(statusReport, null, 2), {
+              headers: { 
+                'Content-Type': 'application/json; charset=utf-8',
+                'Access-Control-Allow-Origin': '*'
+              }
+            }));
+          }
+        } catch (error) {
+          console.error('Health check error:', error);
+          const status = extractErrorStatus(error);
+          addLog('admin_health_error', { error });
+          return complete(createJsonErrorResponse(status, { 
+            error: status === 500 ? 'Internal server error' : `HTTP ${status}`,
+            message: error.message 
+          }, requestLogs, exposeDebugInfo));
+        }
+      }
+
+      // Admin panel request -> pass through to Nuxt
+      addLog('admin_panel_passthrough');
+      return complete(next());
+    }
+
+    // Proxied domain request -> handle load balancing directly in middleware
     // Get rules from KV
     setPhase('read_rules', 'proxy_read_rules_start', { hostname });
     let rules = {};
     try {
       if (typeof lb_kv === 'undefined') {
         addLog('proxy_kv_missing');
-        return createJsonErrorResponse(503, { 
+        return complete(createJsonErrorResponse(503, { 
           error: 'KV namespace not bound',
           message: 'Please bind KV namespace with variable name "lb_kv" in EdgeOne Pages settings'
-        }, requestLogs, exposeDebugInfo);
+        }, requestLogs, exposeDebugInfo));
       }
       rules = await lb_kv.get('rules', { type: 'json' }) || {};
       addLog('proxy_read_rules_done', {
@@ -1007,10 +1244,10 @@ export async function middleware(context) {
     } catch (error) {
       console.error('Failed to read KV:', error);
       addLog('proxy_read_rules_failed', { error });
-      return createJsonErrorResponse(503, { 
+      return complete(createJsonErrorResponse(503, { 
         error: 'KV storage error',
         message: error.message
-      }, requestLogs, exposeDebugInfo);
+      }, requestLogs, exposeDebugInfo));
     }
 
     // Check if we have rules for this hostname
@@ -1020,11 +1257,11 @@ export async function middleware(context) {
         hostname,
         availableDomains: Object.keys(rules),
       });
-      return createJsonErrorResponse(404, { 
+      return complete(createJsonErrorResponse(404, { 
         error: `Domain ${hostname} not configured`,
         hostname: hostname,
         availableDomains: Object.keys(rules)
-      }, requestLogs, exposeDebugInfo);
+      }, requestLogs, exposeDebugInfo));
     }
 
     addLog('proxy_rule_loaded', {
@@ -1041,7 +1278,7 @@ export async function middleware(context) {
         from: request.url,
       });
       url.protocol = 'https:';
-      return Response.redirect(url.toString(), 302);
+      return complete(Response.redirect(url.toString(), 302));
     }
 
     // Health report endpoint - return backend status (same format as worker.js)
@@ -1086,12 +1323,12 @@ export async function middleware(context) {
         };
       }));
 
-      return new Response(JSON.stringify(statusReport, null, 2), {
+      return complete(new Response(JSON.stringify(statusReport, null, 2), {
         headers: { 
           'Content-Type': 'application/json; charset=utf-8',
           'Access-Control-Allow-Origin': '*'
         }
-      });
+      }));
     }
 
     // Trigger health check endpoint - actively probe all backends using worker.js logic
@@ -1144,19 +1381,19 @@ export async function middleware(context) {
         };
       }));
 
-      return new Response(JSON.stringify(statusReport, null, 2), {
+      return complete(new Response(JSON.stringify(statusReport, null, 2), {
         headers: { 
           'Content-Type': 'application/json; charset=utf-8',
           'Access-Control-Allow-Origin': '*'
         }
-      });
+      }));
     }
 
     // Get available targets
     const targets = rule.targets || [];
     if (targets.length === 0) {
       addLog('proxy_no_targets_configured');
-      return createJsonErrorResponse(503, { error: 'No backend targets configured' }, requestLogs, exposeDebugInfo);
+      return complete(createJsonErrorResponse(503, { error: 'No backend targets configured' }, requestLogs, exposeDebugInfo));
     }
 
     const cache = await caches.open('cache-host-metrics');
@@ -1193,7 +1430,7 @@ export async function middleware(context) {
       
       if (!wsTarget) {
         addLog('proxy_no_websocket_backend_available');
-        return createJsonErrorResponse(503, { error: 'No WebSocket backend available' }, requestLogs, exposeDebugInfo);
+        return complete(createJsonErrorResponse(503, { error: 'No WebSocket backend available' }, requestLogs, exposeDebugInfo));
       }
 
       setPhase('websocket_rewrite', 'proxy_websocket_rewrite_start', {
@@ -1216,7 +1453,7 @@ export async function middleware(context) {
         rewriteUrl: proxyUrl.toString(),
       });
 
-      return rewrite(proxyUrl.toString());
+      return complete(rewrite(proxyUrl.toString()));
     }
     
     const REQUEST_TIMEOUT = 10000;
@@ -1261,11 +1498,30 @@ export async function middleware(context) {
             break;
           }
 
+          if (exposeDebugInfo && result.response.body) {
+            deferDebugLogPersistence = true;
+            const streamCompletionTask = new Promise((resolve) => {
+              pendingStreamCompletion = (streamResult) => {
+                phase = 'response_stream';
+                pushRequestLog(requestLogs, phase, 'proxy_stream_settled', streamResult);
+                resolve(persistDebugLog());
+              };
+            });
+
+            if (typeof context.waitUntil === 'function') {
+              context.waitUntil(streamCompletionTask);
+            }
+          }
+
           response = createStreamingProxyResponse(result.response, {
             'X-LB-Backend': item.target.host,
             'X-LB-Powered-By': 'EdgeOne-LB',
             'X-LB-Platform': rule.platform || 'edgeone',
             'X-Accel-Buffering': 'no',
+          }, {
+            onComplete: (streamResult) => {
+              resolvePendingStreamCompletion(streamResult);
+            },
           });
           addLog('proxy_response_selected', {
             target: item.target.host,
@@ -1341,13 +1597,13 @@ export async function middleware(context) {
 
     if (response) {
       addLog('proxy_request_completed_successfully');
-      return response;
+      return complete(response);
     }
 
     setPhase('all_backends_failed', 'proxy_all_backends_failed', {
       attempts: failedAttempts.length,
     });
-    return createJsonErrorResponse(503, {
+    return complete(createJsonErrorResponse(503, {
       error: 'Service Unavailable - All backends failed',
       message: 'Every candidate backend failed during proxying. See logs for the full request trace.',
       request: {
@@ -1359,14 +1615,14 @@ export async function middleware(context) {
         healthPath,
       },
       attempts: failedAttempts,
-    }, requestLogs, exposeDebugInfo);
+    }, requestLogs, exposeDebugInfo));
 
   } catch (error) {
     console.error('Load balancer error:', error);
     const status = extractErrorStatus(error);
     addLog('proxy_unhandled_error', { error });
 
-    return createJsonErrorResponse(status, { 
+    return complete(createJsonErrorResponse(status, { 
       error: status === 500 ? 'Internal server error' : `HTTP ${status}`,
       message: error.message,
       request: {
@@ -1377,7 +1633,20 @@ export async function middleware(context) {
       },
       exception: serializeLogValue(error),
       attempts: failedAttempts,
-    }, requestLogs, exposeDebugInfo);
+    }, requestLogs, exposeDebugInfo));
+  } finally {
+    if (exposeDebugInfo && deferDebugLogPersistence && pendingStreamCompletion) {
+      resolvePendingStreamCompletion({
+        type: 'request_finalized_before_stream_completion',
+      });
+    }
+
+    if (exposeDebugInfo && !deferDebugLogPersistence) {
+      const persistTask = persistDebugLog();
+      if (persistTask) {
+        await persistTask;
+      }
+    }
   }
 }
 

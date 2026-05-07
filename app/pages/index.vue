@@ -1,7 +1,7 @@
 <template>
   <div class="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-slate-100">
     <main class="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
-      <section class="mb-8 flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+      <section class="mb-8 flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <p class="mb-2 text-xs font-semibold uppercase tracking-[0.35em] text-cyan-400">EdgeOne</p>
           <h1 class="text-3xl font-semibold tracking-tight text-white sm:text-4xl">Load Balancer Admin</h1>
@@ -12,8 +12,8 @@
 
         <div class="flex flex-wrap items-center gap-3">
           <button
-            @click="triggerHealthCheck"
-            class="inline-flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm font-medium text-emerald-300 transition hover:bg-emerald-500/20"
+            @click="exportConfig"
+            class="inline-flex items-center gap-2 rounded-xl border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm font-medium text-emerald-300 transition hover:bg-emerald-500/20"
           >
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -51,21 +51,113 @@
       </section>
 
       <section class="mb-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <div class="rounded-2xl border border-slate-700/50 bg-slate-800/50 p-5 backdrop-blur-sm">
+        <div class="rounded-2xl border-slate-700/50 bg-slate-800/50 p-5 backdrop-blur-sm">
           <div class="text-xs font-medium uppercase tracking-[0.25em] text-slate-500">Domains</div>
           <div class="mt-3 text-3xl font-semibold text-white">{{ Object.keys(rules).length }}</div>
         </div>
-        <div class="rounded-2xl border border-slate-700/50 bg-slate-800/50 p-5 backdrop-blur-sm">
+        <div class="rounded-2xl border-slate-700/50 bg-slate-800/50 p-5 backdrop-blur-sm">
           <div class="text-xs font-medium uppercase tracking-[0.25em] text-slate-500">Targets</div>
           <div class="mt-3 text-3xl font-semibold text-white">{{ totalTargets }}</div>
         </div>
-        <div class="rounded-2xl border border-slate-700/50 bg-slate-800/50 p-5 backdrop-blur-sm">
+        <div class="rounded-2xl border-slate-700/50 bg-slate-800/50 p-5 backdrop-blur-sm">
           <div class="text-xs font-medium uppercase tracking-[0.25em] text-slate-500">HTTPS Redirects</div>
           <div class="mt-3 text-3xl font-semibold text-white">{{ forceHttpsCount }}</div>
         </div>
-        <div class="rounded-2xl border border-slate-700/50 bg-slate-800/50 p-5 backdrop-blur-sm">
+        <div class="rounded-2xl border-slate-700/50 bg-slate-800/50 p-5 backdrop-blur-sm">
           <div class="text-xs font-medium uppercase tracking-[0.25em] text-slate-500">Health Endpoints</div>
           <div class="mt-3 text-3xl font-semibold text-white">{{ Object.keys(rules).length }}</div>
+        </div>
+      </section>
+
+      <section class="mb-8 rounded-2xl border-slate-700/50 bg-slate-800/50 p-5 backdrop-blur-sm">
+        <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <div class="text-xs font-medium uppercase tracking-[0.25em] text-fuchsia-400">Debug Logs</div>
+            <p class="mt-2 max-w-2xl text-sm text-slate-400">
+              Requests with a User-Agent or request header containing <code class="font-mono text-fuchsia-300">EdgeoneLBDebugger</code> will appear here after the request fully ends.
+            </p>
+          </div>
+          <button
+            @click="loadDebugLogs"
+            :disabled="debugLogsLoading"
+            class="inline-flex items-center justify-center rounded-xl border-fuchsia-500/30 bg-fuchsia-500/10 px-4 py-3 text-sm font-medium text-fuchsia-300 transition hover:bg-fuchsia-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {{ debugLogsLoading ? 'Refreshing...' : 'Refresh Logs' }}
+          </button>
+        </div>
+
+        <div v-if="debugLogsError" class="mt-4 rounded-xl border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+          {{ debugLogsError }}
+        </div>
+
+        <div v-else-if="debugLogs.length > 0" class="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
+          <div class="space-y-3">
+            <button
+              v-for="item in debugLogs"
+              :key="item.id"
+              type="button"
+              @click="selectDebugLog(item.id)"
+              :class="[
+                'w-full rounded-xl border px-4 py-3 text-left transition',
+                selectedDebugLogId === item.id
+                  ? 'border-fuchsia-400/40 bg-fuchsia-500/10'
+                  : 'border-slate-700/50 bg-slate-900/40 hover:border-slate-600/50 hover:bg-slate-900/70'
+              ]"
+            >
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <div class="font-mono text-sm text-white">{{ item.request?.method || 'UNKNOWN' }} {{ item.request?.pathname || '/' }}</div>
+                <span :class="getOutcomeBadgeClass(item.outcome)" class="rounded px-2 py-0.5 text-[11px] font-medium uppercase tracking-[0.2em]">
+                  {{ item.outcome || 'unknown' }}
+                </span>
+              </div>
+              <div class="mt-2 text-xs text-slate-400">{{ item.request?.hostname || 'Unknown host' }}</div>
+              <div class="mt-2 flex-wrap gap-3 text-xs text-slate-500">
+                <span>Status: {{ item.response?.status ?? '-' }}</span>
+                <span>Phase: {{ item.phase || '-' }}</span>
+                <span>Logs: {{ item.logCount ?? 0 }}</span>
+                <span>{{ formatDateTime(item.completedAt || item.createdAt) }}</span>
+              </div>
+            </button>
+          </div>
+
+          <div class="rounded-xl border-slate-700/50 bg-slate-900/50 p-4">
+            <template v-if="selectedDebugLog">
+              <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <div class="font-mono text-sm text-white">{{ selectedDebugLog.request?.method || 'UNKNOWN' }} {{ selectedDebugLog.request?.url || '' }}</div>
+                  <div class="mt-1 text-xs text-slate-400">ID: {{ selectedDebugLog.id }}</div>
+                </div>
+                <span :class="getOutcomeBadgeClass(selectedDebugLog.outcome)" class="rounded px-2 py-0.5 text-[11px] font-medium uppercase tracking-[0.2em]">
+                  {{ selectedDebugLog.outcome || 'unknown' }}
+                </span>
+              </div>
+
+              <div class="mt-4 grid gap-3 sm:grid-cols-2">
+                <div class="rounded-lg bg-slate-800/60 p-3 text-xs text-slate-300">
+                  <div class="mb-1 text-slate-500">Response</div>
+                  <div>Status: {{ selectedDebugLog.response?.status ?? '-' }} {{ selectedDebugLog.response?.statusText || '' }}</div>
+                  <div class="mt-1">Duration: {{ selectedDebugLog.durationMs ?? '-' }} ms</div>
+                  <div class="mt-1">Phase: {{ selectedDebugLog.phase || '-' }}</div>
+                </div>
+                <div class="rounded-lg bg-slate-800/60 p-3 text-xs text-slate-300">
+                  <div class="mb-1 text-slate-500">Trigger</div>
+                  <div>Header: {{ selectedDebugLog.request?.debugRequestedByHeader ? 'Yes' : 'No' }}</div>
+                  <div class="mt-1">User-Agent: {{ selectedDebugLog.request?.debugRequestedByUserAgent ? 'Yes' : 'No' }}</div>
+                  <div class="mt-1">Kind: {{ selectedDebugLog.kind || '-' }}</div>
+                </div>
+              </div>
+
+              <div class="mt-4 text-xs font-medium uppercase tracking-[0.25em] text-slate-500">Full Record</div>
+              <pre class="mt-3 max-h-[32rem] overflow-auto rounded-xl bg-slate-950/80 p-4 text-xs leading-6 text-slate-200">{{ formatDebugLog(selectedDebugLog) }}</pre>
+            </template>
+            <div v-else class="flex min-h-[12rem] items-center justify-center text-sm text-slate-500">
+              Select a debug log to inspect details.
+            </div>
+          </div>
+        </div>
+
+        <div v-else-if="!debugLogsLoading" class="mt-4 rounded-xl border-slate-700/50 bg-slate-900/40 px-4 py-10 text-center text-sm text-slate-500">
+          No debug logs yet.
         </div>
       </section>
 
@@ -375,6 +467,11 @@ const showAddDomain = ref(false)
 const showAddTarget = ref(false)
 const editingDomain = ref(null)
 const targetDomain = ref('')
+const debugLogs = ref([])
+const debugLogsLoading = ref(false)
+const debugLogsError = ref('')
+const selectedDebugLogId = ref('')
+const selectedDebugLog = ref(null)
 
 const domainForm = ref({
   domain: '',
@@ -403,6 +500,7 @@ const globalTriggerHealthCheckUrl = computed(() => {
 
 onMounted(async () => {
   await loadRules()
+  await loadDebugLogs()
 })
 
 async function loadRules() {
@@ -410,6 +508,53 @@ async function loadRules() {
     rules.value = await $fetch('/api/rules')
   } catch (e) {
     console.error('Failed to load rules:', e)
+  }
+}
+
+async function loadDebugLogs() {
+  debugLogsLoading.value = true
+  debugLogsError.value = ''
+
+  try {
+    const response = await $fetch('/api/logs')
+    debugLogs.value = Array.isArray(response?.items) ? response.items : []
+
+    if (debugLogs.value.length === 0) {
+      selectedDebugLogId.value = ''
+      selectedDebugLog.value = null
+      return
+    }
+
+    const nextId = selectedDebugLogId.value && debugLogs.value.some((item) => item.id === selectedDebugLogId.value)
+      ? selectedDebugLogId.value
+      : debugLogs.value[0].id
+
+    await selectDebugLog(nextId)
+  } catch (e) {
+    console.error('Failed to load debug logs:', e)
+    debugLogsError.value = e?.data?.error || e?.message || 'Failed to load debug logs'
+  } finally {
+    debugLogsLoading.value = false
+  }
+}
+
+async function selectDebugLog(id) {
+  if (!id) {
+    selectedDebugLogId.value = ''
+    selectedDebugLog.value = null
+    return
+  }
+
+  debugLogsError.value = ''
+  selectedDebugLogId.value = id
+
+  try {
+    selectedDebugLog.value = await $fetch('/api/logs', {
+      query: { id },
+    })
+  } catch (e) {
+    console.error('Failed to load debug log detail:', e)
+    debugLogsError.value = e?.data?.error || e?.message || 'Failed to load debug log detail'
   }
 }
 
@@ -514,6 +659,35 @@ async function copyToClipboard(text) {
   } catch (e) {
     console.error('Failed to copy:', e)
   }
+}
+
+function getOutcomeBadgeClass(outcome) {
+  const classes = {
+    success: 'border border-emerald-500/30 bg-emerald-500/20 text-emerald-300',
+    redirect: 'border border-cyan-500/30 bg-cyan-500/20 text-cyan-300',
+    'client-error': 'border border-amber-500/30 bg-amber-500/20 text-amber-300',
+    'server-error': 'border border-red-500/30 bg-red-500/20 text-red-300',
+    unknown: 'border border-slate-500/30 bg-slate-500/20 text-slate-300',
+  }
+
+  return classes[outcome] || classes.unknown
+}
+
+function formatDateTime(value) {
+  if (!value) {
+    return '-'
+  }
+
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return String(value)
+  }
+
+  return date.toLocaleString()
+}
+
+function formatDebugLog(log) {
+  return JSON.stringify(log, null, 2)
 }
 
 async function exportConfig() {
