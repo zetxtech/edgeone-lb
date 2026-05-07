@@ -1082,7 +1082,9 @@ export async function middleware(context) {
   let finalResponseStatusText = '';
   let requestKind = 'unknown';
   let deferDebugLogPersistence = false;
-  let debugLogPersistStarted = false;
+  let realtimeDebugLogPersistence = false;
+  let debugLogPersistenceClosed = false;
+  let debugLogPersistChain = Promise.resolve();
   let pendingStreamCompletion = null;
   let responseCompletionPromise = null;
   const complete = (responseOrPromise) => {
@@ -1102,14 +1104,9 @@ export async function middleware(context) {
     pendingStreamCompletion(streamResult);
     pendingStreamCompletion = null;
   };
-  const persistDebugLog = () => {
-    if (!exposeDebugInfo || debugLogPersistStarted) {
-      return null;
-    }
-
-    debugLogPersistStarted = true;
+  const buildDebugLogRecord = () => {
     const completedAt = new Date().toISOString();
-    const logRecord = {
+    return {
       id: debugLogId,
       createdAt: new Date(requestStartedAt).toISOString(),
       completedAt,
@@ -1131,27 +1128,51 @@ export async function middleware(context) {
         status: finalResponseStatus,
         statusText: finalResponseStatusText,
       },
-      attempts: failedAttempts,
-      logs: requestLogs,
+      attempts: serializeLogValue(failedAttempts),
+      logs: serializeLogValue(requestLogs),
     };
-    const persistTask = persistDebugLogRecord(logRecord).catch((persistError) => {
-      console.error('Failed to persist debug logs:', persistError);
-    });
-
-    if (typeof context.waitUntil === 'function') {
-      context.waitUntil(persistTask);
-      return persistTask;
+  };
+  const persistDebugLog = ({ finalize = false } = {}) => {
+    if (!exposeDebugInfo || debugLogPersistenceClosed) {
+      return null;
     }
 
+    if (finalize) {
+      debugLogPersistenceClosed = true;
+    }
+
+    const logRecord = buildDebugLogRecord();
+    const persistTask = debugLogPersistChain
+      .catch(() => {})
+      .then(() => persistDebugLogRecord(logRecord))
+      .catch((persistError) => {
+        console.error('Failed to persist debug logs:', persistError);
+      });
+
+    debugLogPersistChain = persistTask;
     return persistTask;
   };
   const addLog = exposeDebugInfo
-    ? (message, detail) => pushRequestLog(requestLogs, phase, message, detail)
+    ? (message, detail) => {
+        pushRequestLog(requestLogs, phase, message, detail);
+        if (realtimeDebugLogPersistence) {
+          const persistTask = persistDebugLog();
+          if (persistTask) {
+            persistTask.catch(() => {});
+          }
+        }
+      }
     : () => {};
   const setPhase = (nextPhase, message, detail) => {
     phase = nextPhase;
     if (exposeDebugInfo) {
       pushRequestLog(requestLogs, phase, message, detail);
+      if (realtimeDebugLogPersistence) {
+        const persistTask = persistDebugLog();
+        if (persistTask) {
+          persistTask.catch(() => {});
+        }
+      }
     }
   };
 
@@ -1538,6 +1559,10 @@ export async function middleware(context) {
     let response = null;
 
     // Serial Failover Logic (ported from worker.js)
+    if (exposeDebugInfo) {
+      realtimeDebugLogPersistence = true;
+    }
+
     for (const item of candidates) {
       const start = Date.now();
       const timeout = item.status === 'unhealthy' ? FAST_FAIL_TIMEOUT : REQUEST_TIMEOUT;
@@ -1573,22 +1598,21 @@ export async function middleware(context) {
           // Wrapping WebSocket 101 response would break the connection
           if (result.isWebSocket) {
             response = result.response;
+            finalResponseStatus = response?.status ?? 101;
+            finalResponseStatusText = response?.statusText || '';
             break;
           }
 
           if (exposeDebugInfo && result.response.body) {
             deferDebugLogPersistence = true;
-            const streamCompletionTask = new Promise((resolve) => {
-              pendingStreamCompletion = (streamResult) => {
-                phase = 'response_stream';
-                pushRequestLog(requestLogs, phase, 'proxy_stream_settled', streamResult);
-                resolve(persistDebugLog());
-              };
-            });
-
-            if (typeof context.waitUntil === 'function') {
-              context.waitUntil(streamCompletionTask);
-            }
+            pendingStreamCompletion = (streamResult) => {
+              phase = 'response_stream';
+              pushRequestLog(requestLogs, phase, 'proxy_stream_settled', streamResult);
+              const persistTask = persistDebugLog({ finalize: true });
+              if (persistTask) {
+                persistTask.catch(() => {});
+              }
+            };
           }
 
           response = createStreamingProxyResponse(result.response, {
@@ -1600,15 +1624,25 @@ export async function middleware(context) {
             onFirstUpstreamChunk: (streamResult) => {
               phase = 'response_stream';
               pushRequestLog(requestLogs, phase, 'proxy_stream_first_upstream_chunk', streamResult);
+              const persistTask = persistDebugLog();
+              if (persistTask) {
+                persistTask.catch(() => {});
+              }
             },
             onFirstDownstreamChunk: (streamResult) => {
               phase = 'response_stream';
               pushRequestLog(requestLogs, phase, 'proxy_stream_first_downstream_chunk', streamResult);
+              const persistTask = persistDebugLog();
+              if (persistTask) {
+                persistTask.catch(() => {});
+              }
             },
             onComplete: (streamResult) => {
               resolvePendingStreamCompletion(streamResult);
             },
           });
+          finalResponseStatus = response.status;
+          finalResponseStatusText = response.statusText;
           addLog('proxy_response_selected', {
             target: item.target.host,
             status: result.response.status,
@@ -1727,14 +1761,8 @@ export async function middleware(context) {
       } catch {}
     }
 
-    if (exposeDebugInfo && deferDebugLogPersistence && pendingStreamCompletion && typeof context.waitUntil !== 'function') {
-      resolvePendingStreamCompletion({
-        type: 'request_finalized_before_stream_completion',
-      });
-    }
-
     if (exposeDebugInfo && !deferDebugLogPersistence) {
-      const persistTask = persistDebugLog();
+      const persistTask = persistDebugLog({ finalize: true });
       if (persistTask) {
         await persistTask;
       }
