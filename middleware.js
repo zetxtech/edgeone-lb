@@ -454,6 +454,26 @@ function buildUpstreamHostHeader(target, protocol) {
   return `${hostname}:${port}`;
 }
 
+function getChunkByteLength(chunk) {
+  if (chunk == null) {
+    return 0;
+  }
+
+  if (typeof chunk.byteLength === 'number') {
+    return chunk.byteLength;
+  }
+
+  if (typeof chunk.length === 'number') {
+    return chunk.length;
+  }
+
+  if (typeof chunk === 'string') {
+    return new TextEncoder().encode(chunk).byteLength;
+  }
+
+  return null;
+}
+
 function createStreamingProxyResponse(response, injectedHeaders = {}, options = {}) {
   const headers = sanitizeProxyResponseHeaders(response.headers);
 
@@ -466,8 +486,11 @@ function createStreamingProxyResponse(response, injectedHeaders = {}, options = 
   let body = null;
 
   if (response.body) {
-    const reader = response.body.getReader();
     let settled = false;
+    let firstUpstreamChunkObserved = false;
+    let firstDownstreamChunkObserved = false;
+    const streamStartedAt = Date.now();
+    const contentType = response.headers.get('content-type') || null;
     const settle = (type, detail = undefined) => {
       if (settled) {
         return;
@@ -481,28 +504,46 @@ function createStreamingProxyResponse(response, injectedHeaders = {}, options = 
       }
     };
 
-    body = new ReadableStream({
-      async pull(controller) {
-        try {
-          const { done, value } = await reader.read();
-          if (done) {
-            settle('completed');
-            controller.close();
-            return;
-          }
+    const transformer = new TransformStream({
+      transform(chunk, controller) {
+        const chunkBytes = getChunkByteLength(chunk);
 
-          controller.enqueue(value);
-        } catch (error) {
-          settle('errored', error);
-          controller.error(error);
+        if (!firstUpstreamChunkObserved && typeof options.onFirstUpstreamChunk === 'function') {
+          firstUpstreamChunkObserved = true;
+          try {
+            options.onFirstUpstreamChunk({
+              chunkBytes,
+              contentType,
+              elapsedMs: Date.now() - streamStartedAt,
+            });
+          } catch {}
+        }
+
+        controller.enqueue(chunk);
+
+        if (!firstDownstreamChunkObserved && typeof options.onFirstDownstreamChunk === 'function') {
+          firstDownstreamChunkObserved = true;
+          try {
+            options.onFirstDownstreamChunk({
+              chunkBytes,
+              contentType,
+              elapsedMs: Date.now() - streamStartedAt,
+            });
+          } catch {}
         }
       },
-      async cancel(reason) {
-        try {
-          await reader.cancel(reason);
-        } catch {}
-        settle('canceled', reason);
-      },
+    });
+    body = transformer.readable;
+
+    response.body.pipeTo(transformer.writable).then(() => {
+      settle('completed');
+    }).catch((error) => {
+      if (error?.name === 'AbortError') {
+        settle('canceled', error);
+        return;
+      }
+
+      settle('errored', error);
     });
   }
 
@@ -583,8 +624,9 @@ async function getSortedCandidates(targets, cache) {
   });
 }
 
-// Probe a single target (ported from worker.js)
-async function probeTarget(target, request, originalUrl, isWebSocket, signal, addLog = null) {
+// Forward a request to a single target.
+// This is shared by normal proxy traffic and explicit health checks.
+async function requestTarget(target, request, originalUrl, isWebSocket, signal, addLog = null) {
   try {
     const upstreamUrl = new URL(originalUrl);
     const parts = target.host.split(":");
@@ -593,7 +635,7 @@ async function probeTarget(target, request, originalUrl, isWebSocket, signal, ad
     const streamingRequest = !isWebSocket;
 
     if (addLog) {
-      addLog('probe_target_prepare_request', {
+      addLog('upstream_prepare_request', {
         target: target.host,
         targetType: target.type,
         upstreamUrl: upstreamUrl.toString(),
@@ -655,7 +697,7 @@ async function probeTarget(target, request, originalUrl, isWebSocket, signal, ad
     }
 
     if (addLog) {
-      addLog('probe_target_request_ready', {
+      addLog('upstream_request_ready', {
         target: target.host,
         upstreamUrl: upstreamUrl.toString(),
         method: request.method,
@@ -669,7 +711,7 @@ async function probeTarget(target, request, originalUrl, isWebSocket, signal, ad
     let resp;
     try {
       if (addLog) {
-        addLog('probe_target_fetch_start', {
+        addLog('upstream_fetch_start', {
           target: target.host,
           upstreamUrl: upstreamUrl.toString(),
           method: request.method,
@@ -678,7 +720,7 @@ async function probeTarget(target, request, originalUrl, isWebSocket, signal, ad
       resp = await fetch(upstreamReq);
     } catch (fetchError) {
       if (addLog) {
-        addLog('probe_target_fetch_failed', {
+        addLog('upstream_fetch_failed', {
           target: target.host,
           upstreamUrl: upstreamUrl.toString(),
           error: fetchError,
@@ -700,7 +742,7 @@ async function probeTarget(target, request, originalUrl, isWebSocket, signal, ad
     }
 
     if (addLog) {
-      addLog('probe_target_fetch_completed', {
+      addLog('upstream_fetch_completed', {
         target: target.host,
         upstreamUrl: upstreamUrl.toString(),
         status: resp.status,
@@ -784,7 +826,7 @@ async function probeTarget(target, request, originalUrl, isWebSocket, signal, ad
               if (resolved) return;
               resolved = true;
               if (addLog) {
-                addLog('probe_target_websocket_failed', {
+                addLog('upstream_websocket_failed', {
                   target: target.host,
                   upstreamUrl: upstreamWsUrl.toString(),
                   error: e,
@@ -799,7 +841,7 @@ async function probeTarget(target, request, originalUrl, isWebSocket, signal, ad
               resolved = true;
               try { upstreamSocket.close(); } catch {}
               if (addLog) {
-                addLog('probe_target_websocket_timeout', {
+                addLog('upstream_websocket_timeout', {
                   target: target.host,
                   upstreamUrl: upstreamWsUrl.toString(),
                 });
@@ -809,7 +851,7 @@ async function probeTarget(target, request, originalUrl, isWebSocket, signal, ad
           });
         } catch (e) {
           if (addLog) {
-            addLog('probe_target_websocket_error', {
+            addLog('upstream_websocket_error', {
               target: target.host,
               upstreamUrl: upstreamWsUrl.toString(),
               error: e,
@@ -833,7 +875,7 @@ async function probeTarget(target, request, originalUrl, isWebSocket, signal, ad
 
     if (!judged.ok) {
       if (addLog) {
-        addLog('probe_target_response_rejected', {
+        addLog('upstream_response_rejected', {
           target: target.host,
           upstreamUrl: upstreamUrl.toString(),
           reason: judged.reason,
@@ -853,7 +895,7 @@ async function probeTarget(target, request, originalUrl, isWebSocket, signal, ad
     }
 
     if (addLog) {
-      addLog('probe_target_response_accepted', {
+      addLog('upstream_response_accepted', {
         target: target.host,
         upstreamUrl: upstreamUrl.toString(),
         status: judged.response.status,
@@ -870,7 +912,7 @@ async function probeTarget(target, request, originalUrl, isWebSocket, signal, ad
   } catch (e) {
     if (e.name === 'AbortError') throw e;
     if (addLog) {
-      addLog('probe_target_unhandled_error', {
+      addLog('upstream_request_unhandled_error', {
         target: target.host,
         url: originalUrl.toString(),
         error: e,
@@ -913,7 +955,7 @@ async function runBackgroundHealthCheck(candidatesWithStats, healthPath, cache) 
 
       const duration = Date.now() - start;
 
-      const result = await probeTarget(
+      const result = await requestTarget(
         target,
         req,
         checkUrl,
@@ -954,11 +996,15 @@ export async function middleware(context) {
   let deferDebugLogPersistence = false;
   let debugLogPersistStarted = false;
   let pendingStreamCompletion = null;
-  const complete = async (responseOrPromise) => {
-    const resolved = await responseOrPromise;
-    finalResponseStatus = resolved?.status ?? null;
-    finalResponseStatusText = resolved?.statusText || '';
-    return resolved;
+  let responseCompletionPromise = null;
+  const complete = (responseOrPromise) => {
+    responseCompletionPromise = Promise.resolve(responseOrPromise).then((resolved) => {
+      finalResponseStatus = resolved?.status ?? null;
+      finalResponseStatusText = resolved?.statusText || '';
+      return resolved;
+    });
+
+    return responseCompletionPromise;
   };
   const resolvePendingStreamCompletion = (streamResult) => {
     if (!pendingStreamCompletion) {
@@ -1464,7 +1510,7 @@ export async function middleware(context) {
     for (const item of candidates) {
       const start = Date.now();
       const timeout = item.status === 'unhealthy' ? FAST_FAIL_TIMEOUT : REQUEST_TIMEOUT;
-      setPhase(`probe:${item.target.host}`, 'proxy_probe_start', {
+      setPhase(`attempt:${item.target.host}`, 'proxy_attempt_start', {
         target: item.target.host,
         targetType: item.target.type,
         candidateStatus: item.status,
@@ -1472,7 +1518,7 @@ export async function middleware(context) {
       });
       
       try {
-        const result = await probeTarget(
+        const result = await requestTarget(
           item.target,
           request.clone(),
           url,
@@ -1483,7 +1529,7 @@ export async function middleware(context) {
         const duration = Date.now() - start;
         
         if (result && result.ok) {
-          addLog('proxy_probe_succeeded', {
+          addLog('proxy_attempt_succeeded', {
             target: item.target.host,
             duration,
             isWebSocket: !!result.isWebSocket,
@@ -1519,6 +1565,14 @@ export async function middleware(context) {
             'X-LB-Platform': rule.platform || 'edgeone',
             'X-Accel-Buffering': 'no',
           }, {
+            onFirstUpstreamChunk: (streamResult) => {
+              phase = 'response_stream';
+              pushRequestLog(requestLogs, phase, 'proxy_stream_first_upstream_chunk', streamResult);
+            },
+            onFirstDownstreamChunk: (streamResult) => {
+              phase = 'response_stream';
+              pushRequestLog(requestLogs, phase, 'proxy_stream_first_downstream_chunk', streamResult);
+            },
             onComplete: (streamResult) => {
               resolvePendingStreamCompletion(streamResult);
             },
@@ -1530,7 +1584,7 @@ export async function middleware(context) {
           });
           break;
         } else {
-          addLog('proxy_probe_failed', {
+          addLog('proxy_attempt_failed', {
             target: item.target.host,
             duration,
             reason: result?.reason || 'Unknown failure',
@@ -1556,7 +1610,7 @@ export async function middleware(context) {
       } catch (e) {
         const duration = Date.now() - start;
         const reason = e.name === 'TimeoutError' ? 'Timeout' : e.message;
-        addLog('proxy_probe_threw', {
+        addLog('proxy_attempt_threw', {
           target: item.target.host,
           duration,
           reason,
@@ -1635,7 +1689,13 @@ export async function middleware(context) {
       attempts: failedAttempts,
     }, requestLogs, exposeDebugInfo));
   } finally {
-    if (exposeDebugInfo && deferDebugLogPersistence && pendingStreamCompletion) {
+    if (responseCompletionPromise) {
+      try {
+        await responseCompletionPromise;
+      } catch {}
+    }
+
+    if (exposeDebugInfo && deferDebugLogPersistence && pendingStreamCompletion && typeof context.waitUntil !== 'function') {
       resolvePendingStreamCompletion({
         type: 'request_finalized_before_stream_completion',
       });
