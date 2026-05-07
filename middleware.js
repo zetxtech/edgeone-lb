@@ -371,6 +371,7 @@ function handleRedirect(response, originalUrl) {
 
 function sanitizeProxyResponseHeaders(headers) {
   const sanitized = new Headers(headers);
+  const originalContentEncoding = headers.get('content-encoding');
   const hopByHopHeaders = [
     'connection',
     'keep-alive',
@@ -395,7 +396,11 @@ function sanitizeProxyResponseHeaders(headers) {
   }
 
   sanitized.delete('content-length');
-  sanitized.delete('content-encoding');
+  if (originalContentEncoding) {
+    sanitized.set('content-encoding', originalContentEncoding);
+  } else {
+    sanitized.set('content-encoding', 'identity');
+  }
 
   return sanitized;
 }
@@ -564,7 +569,354 @@ async function updateMetrics(cache, host, status, latency, reason = null) {
   
   // Write to KV storage (for cross-domain access)
   try {
-    if (typeof lb_kv !== 'undefined') {
+    if (typeof {
+  "id": "e4a4b0b4-6447-4475-9313-cea6bc933620",
+  "createdAt": "2026-05-07T16:14:23.974Z",
+  "completedAt": "2026-05-07T16:24:25.212Z",
+  "durationMs": 601238,
+  "phase": "response_stream",
+  "kind": "proxy",
+  "outcome": "success",
+  "request": {
+    "method": "GET",
+    "url": "https://elb-test.zetx.tech/.sse",
+    "hostname": "elb-test.zetx.tech",
+    "pathname": "/.sse",
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36  EdgeoneLBDebugger/1.0",
+    "debugRequestedByHeader": false,
+    "debugRequestedByUserAgent": true,
+    "headers": {
+      "Connection": "keep-alive",
+      "Pragma": "no-cache",
+      "Cache-Control": "no-cache",
+      "Upgrade-Insecure-Requests": "1",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36  EdgeoneLBDebugger/1.0",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+      "Sec-Fetch-Site": "none",
+      "Sec-Fetch-Mode": "navigate",
+      "Sec-Fetch-User": "?1",
+      "Sec-Fetch-Dest": "document",
+      "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
+      "Cookie": "[Redacted]",
+      "CDN-Loop": "TencentEdgeOne; loops=1",
+      "Accept-Encoding": "gzip,deflate,br",
+      "X-NWS-LOG-UUID": "2084093418507102548",
+      "Host": "elb-test.zetx.tech",
+      "Content-Length": "0"
+    }
+  },
+  "response": {
+    "status": 200,
+    "statusText": "OK"
+  },
+  "attempts": [],
+  "logs": [
+    {
+      "time": "2026-05-07T16:14:23.974Z",
+      "phase": "init",
+      "message": "request_received",
+      "detail": {
+        "url": "https://elb-test.zetx.tech/.sse",
+        "method": "GET",
+        "hostname": "elb-test.zetx.tech",
+        "pathname": "/.sse",
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36  EdgeoneLBDebugger/1.0",
+        "headers": {
+          "Connection": "keep-alive",
+          "Pragma": "no-cache",
+          "Cache-Control": "no-cache",
+          "Upgrade-Insecure-Requests": "1",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36  EdgeoneLBDebugger/1.0",
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "Sec-Fetch-Site": "none",
+          "Sec-Fetch-Mode": "navigate",
+          "Sec-Fetch-User": "?1",
+          "Sec-Fetch-Dest": "document",
+          "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
+          "Cookie": "[Redacted]",
+          "CDN-Loop": "TencentEdgeOne; loops=1",
+          "Accept-Encoding": "gzip,deflate,br",
+          "X-NWS-LOG-UUID": "2084093418507102548",
+          "Host": "elb-test.zetx.tech",
+          "Content-Length": "0"
+        },
+        "debugRequestedByHeader": false,
+        "debugRequestedByUserAgent": true
+      }
+    },
+    {
+      "time": "2026-05-07T16:14:23.974Z",
+      "phase": "init",
+      "message": "request_classified",
+      "detail": {
+        "isAdmin": false
+      }
+    },
+    {
+      "time": "2026-05-07T16:14:23.974Z",
+      "phase": "read_rules",
+      "message": "proxy_read_rules_start",
+      "detail": {
+        "hostname": "elb-test.zetx.tech"
+      }
+    },
+    {
+      "time": "2026-05-07T16:14:24.369Z",
+      "phase": "read_rules",
+      "message": "proxy_read_rules_done",
+      "detail": {
+        "domainCount": 1
+      }
+    },
+    {
+      "time": "2026-05-07T16:14:24.369Z",
+      "phase": "read_rules",
+      "message": "proxy_rule_loaded",
+      "detail": {
+        "hostname": "elb-test.zetx.tech",
+        "forceHttps": true,
+        "healthPath": "/",
+        "targetCount": 1,
+        "platform": "edgeone"
+      }
+    },
+    {
+      "time": "2026-05-07T16:14:24.369Z",
+      "phase": "read_rules",
+      "message": "proxy_open_metrics_cache_start",
+      "detail": {
+        "cacheName": "cache-host-metrics"
+      }
+    },
+    {
+      "time": "2026-05-07T16:14:24.369Z",
+      "phase": "read_rules",
+      "message": "proxy_open_metrics_cache_done",
+      "detail": {
+        "cacheName": "cache-host-metrics"
+      }
+    },
+    {
+      "time": "2026-05-07T16:14:24.369Z",
+      "phase": "read_rules",
+      "message": "proxy_request_mode",
+      "detail": {
+        "isWebSocket": false,
+        "healthPath": "/",
+        "targetCount": 1
+      }
+    },
+    {
+      "time": "2026-05-07T16:14:24.369Z",
+      "phase": "load_candidates",
+      "message": "proxy_load_candidates_start",
+      "detail": {
+        "targetCount": 1
+      }
+    },
+    {
+      "time": "2026-05-07T16:14:24.369Z",
+      "phase": "load_candidates",
+      "message": "candidate_cache_lookup_start",
+      "detail": {
+        "target": "echo.websocket.org:443",
+        "cacheKey": "https://echo.websocket.org:443/_metric"
+      }
+    },
+    {
+      "time": "2026-05-07T16:14:24.392Z",
+      "phase": "load_candidates",
+      "message": "candidate_cache_lookup_failed",
+      "detail": {
+        "target": "echo.websocket.org:443",
+        "cacheKey": "https://echo.websocket.org:443/_metric",
+        "error": {
+          "name": "Error",
+          "message": "504",
+          "stack": "Error: 504",
+          "cause": null
+        }
+      }
+    },
+    {
+      "time": "2026-05-07T16:14:24.392Z",
+      "phase": "load_candidates",
+      "message": "proxy_load_candidates_done",
+      "detail": [
+        {
+          "host": "echo.websocket.org:443",
+          "type": "direct",
+          "status": "unknown",
+          "latency": 9999,
+          "lastChecked": 0,
+          "reason": null
+        }
+      ]
+    },
+    {
+      "time": "2026-05-07T16:14:24.392Z",
+      "phase": "attempt:echo.websocket.org:443",
+      "message": "proxy_attempt_start",
+      "detail": {
+        "target": "echo.websocket.org:443",
+        "targetType": "direct",
+        "candidateStatus": "unknown",
+        "timeout": 10000
+      }
+    },
+    {
+      "time": "2026-05-07T16:14:24.393Z",
+      "phase": "attempt:echo.websocket.org:443",
+      "message": "upstream_prepare_request",
+      "detail": {
+        "target": "echo.websocket.org:443",
+        "targetType": "direct",
+        "upstreamUrl": "https://echo.websocket.org/.sse",
+        "method": "GET",
+        "isWebSocket": false,
+        "streamingRequest": true
+      }
+    },
+    {
+      "time": "2026-05-07T16:14:24.393Z",
+      "phase": "attempt:echo.websocket.org:443",
+      "message": "upstream_request_ready",
+      "detail": {
+        "target": "echo.websocket.org:443",
+        "upstreamUrl": "https://echo.websocket.org/.sse",
+        "method": "GET",
+        "hasBody": true,
+        "headers": {
+          "Pragma": "no-cache",
+          "Cache-Control": "no-cache, no-transform",
+          "Upgrade-Insecure-Requests": "1",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36  EdgeoneLBDebugger/1.0",
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "Sec-Fetch-Site": "none",
+          "Sec-Fetch-Mode": "navigate",
+          "Sec-Fetch-User": "?1",
+          "Sec-Fetch-Dest": "document",
+          "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
+          "Cookie": "[Redacted]",
+          "Accept-Encoding": "identity",
+          "Host": "echo.websocket.org",
+          "LB-Connecting-IP": "101.71.37.180",
+          "X-Real-IP": "101.71.37.180",
+          "X-Forwarded-For": "101.71.37.180",
+          "X-Forwarded-Proto": "https",
+          "LB-IPCountry": "CN",
+          "LB-IPASN": "4837"
+        }
+      }
+    },
+    {
+      "time": "2026-05-07T16:14:24.393Z",
+      "phase": "attempt:echo.websocket.org:443",
+      "message": "upstream_fetch_start",
+      "detail": {
+        "target": "echo.websocket.org:443",
+        "upstreamUrl": "https://echo.websocket.org/.sse",
+        "method": "GET"
+      }
+    },
+    {
+      "time": "2026-05-07T16:14:25.224Z",
+      "phase": "attempt:echo.websocket.org:443",
+      "message": "upstream_fetch_completed",
+      "detail": {
+        "target": "echo.websocket.org:443",
+        "upstreamUrl": "https://echo.websocket.org/.sse",
+        "status": 200,
+        "statusText": "OK",
+        "hasWebSocket": false,
+        "headers": {
+          "access-control-allow-origin": "*",
+          "cache-control": "no-cache",
+          "connection": "keep-alive",
+          "content-type": "text/event-stream",
+          "date": "Thu, 07 May 2026 16:14:25 GMT",
+          "transfer-encoding": "chunked",
+          "server": "Fly/421c5554c (2026-05-06)",
+          "via": "1.1 fly.io, 1.1 fly.io",
+          "fly-request-id": "01KR1KG2K40T0A00RH2RFC0T8X-lax"
+        }
+      }
+    },
+    {
+      "time": "2026-05-07T16:14:25.224Z",
+      "phase": "attempt:echo.websocket.org:443",
+      "message": "upstream_response_accepted",
+      "detail": {
+        "target": "echo.websocket.org:443",
+        "upstreamUrl": "https://echo.websocket.org/.sse",
+        "status": 200,
+        "statusText": "OK"
+      }
+    },
+    {
+      "time": "2026-05-07T16:14:25.224Z",
+      "phase": "attempt:echo.websocket.org:443",
+      "message": "proxy_attempt_succeeded",
+      "detail": {
+        "target": "echo.websocket.org:443",
+        "duration": 832,
+        "isWebSocket": false,
+        "status": 200
+      }
+    },
+    {
+      "time": "2026-05-07T16:14:25.495Z",
+      "phase": "attempt:echo.websocket.org:443",
+      "message": "proxy_response_selected",
+      "detail": {
+        "target": "echo.websocket.org:443",
+        "status": 200,
+        "statusText": "OK"
+      }
+    },
+    {
+      "time": "2026-05-07T16:14:25.496Z",
+      "phase": "background_health_check",
+      "message": "proxy_background_health_check_scheduled",
+      "detail": {
+        "healthPath": "/"
+      }
+    },
+    {
+      "time": "2026-05-07T16:14:25.496Z",
+      "phase": "background_health_check",
+      "message": "proxy_request_completed_successfully"
+    },
+    {
+      "time": "2026-05-07T16:14:25.497Z",
+      "phase": "response_stream",
+      "message": "proxy_stream_first_upstream_chunk",
+      "detail": {
+        "chunkBytes": 42,
+        "contentType": "text/event-stream",
+        "elapsedMs": 2
+      }
+    },
+    {
+      "time": "2026-05-07T16:14:25.497Z",
+      "phase": "response_stream",
+      "message": "proxy_stream_first_downstream_chunk",
+      "detail": {
+        "chunkBytes": 42,
+        "contentType": "text/event-stream",
+        "elapsedMs": 2
+      }
+    },
+    {
+      "time": "2026-05-07T16:24:25.212Z",
+      "phase": "response_stream",
+      "message": "proxy_stream_settled",
+      "detail": {
+        "type": "completed"
+      }
+    }
+  ]
+} !== 'undefined') {
       await lb_kv.put(`health:${host}`, JSON.stringify(data), {
         expirationTtl: 600
       });
@@ -733,7 +1085,12 @@ async function requestTarget(target, request, originalUrl, isWebSocket, signal, 
       upstreamHeaders.set('Host', buildUpstreamHostHeader(target, upstreamUrl.protocol));
     }
     if (streamingRequest) {
-      upstreamHeaders.set('Accept-Encoding', 'identity');
+      const requestAcceptEncoding = request.headers.get('Accept-Encoding');
+      if (requestAcceptEncoding) {
+        upstreamHeaders.set('Accept-Encoding', requestAcceptEncoding);
+      } else {
+        upstreamHeaders.delete('Accept-Encoding');
+      }
       upstreamHeaders.set('Cache-Control', 'no-cache, no-transform');
     }
     
