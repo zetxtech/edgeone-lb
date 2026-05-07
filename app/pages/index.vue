@@ -12,6 +12,15 @@
 
         <div class="flex flex-wrap items-center gap-3">
           <button
+            @click="triggerHealthCheck"
+            class="inline-flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm font-medium text-emerald-300 transition hover:bg-emerald-500/20"
+          >
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            Run Health Check
+          </button>
+          <button
             @click="exportConfig"
             class="inline-flex items-center gap-2 rounded-xl border border-slate-600/40 bg-slate-800/60 px-4 py-3 text-sm font-medium text-slate-200 transition hover:border-cyan-400/40 hover:text-white"
           >
@@ -94,16 +103,28 @@
 
                 <div class="rounded-xl border border-slate-700/40 bg-slate-900/50 p-3">
                   <div class="mb-1.5 text-xs text-slate-400">Health Report Endpoint</div>
-                  <button
-                    @click="copyToClipboard(`https://${domain}/_health`)"
-                    class="inline-flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 font-mono text-xs text-emerald-300 transition hover:bg-emerald-500/20"
-                    :title="`Copy: https://${domain}/_health`"
-                  >
-                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                    </svg>
-                    https://{{ domain }}/_health
-                  </button>
+                  <div class="flex flex-wrap gap-2">
+                    <button
+                      @click="copyToClipboard(`https://${domain}/_health`)"
+                      class="inline-flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 font-mono text-xs text-emerald-300 transition hover:bg-emerald-500/20"
+                      :title="`Copy: https://${domain}/_health`"
+                    >
+                      <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                      </svg>
+                      https://{{ domain }}/_health
+                    </button>
+                    <button
+                      @click="copyToClipboard(`https://${domain}/_trigger_health_check`)"
+                      class="inline-flex items-center gap-2 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-3 py-1.5 font-mono text-xs text-cyan-300 transition hover:bg-cyan-500/20"
+                      :title="`Copy: https://${domain}/_trigger_health_check`"
+                    >
+                      <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                      </svg>
+                      https://{{ domain }}/_trigger_health_check
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -364,6 +385,15 @@ async function loadRules() {
     rules.value = await $fetch('/api/rules')
   } catch (e) {
     console.error('Failed to load rules:', e)
+  }
+}
+
+async function triggerHealthCheck() {
+  try {
+    await $fetch('/_trigger_health_check')
+  } catch (e) {
+    console.error('Failed to trigger health check:', e)
+    alert('Failed to trigger health check: ' + e.message)
   }
 }
 

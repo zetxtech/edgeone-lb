@@ -8,6 +8,11 @@ const ADMIN_HOSTNAMES = [
   'elb.zetx.tech'
 ];
 
+const DEBUG_HEADER = 'EdgeoneLBDebugger';
+const GENERIC_ERROR_RESPONSE_BODY = {
+  error: 'Internal server error',
+};
+
 // =================================================================
 // Utility: Create AbortSignal with timeout (compatibility wrapper)
 // =================================================================
@@ -19,6 +24,106 @@ function createTimeoutSignal(timeoutMs) {
   const controller = new AbortController();
   setTimeout(() => controller.abort(), timeoutMs);
   return controller.signal;
+}
+
+function extractErrorStatus(error, fallback = 500) {
+  const candidates = [
+    error?.status,
+    error?.statusCode,
+    error?.response?.status,
+    error?.cause?.status,
+    error?.cause?.statusCode,
+  ];
+
+  for (const candidate of candidates) {
+    const value = Number(candidate);
+    if (Number.isInteger(value) && value >= 400 && value <= 599) {
+      return value;
+    }
+  }
+
+  const message = String(error?.message || '').trim();
+  if (/^\d{3}$/.test(message)) {
+    const value = Number(message);
+    if (value >= 400 && value <= 599) {
+      return value;
+    }
+  }
+
+  return fallback;
+}
+
+function shouldExposeDebugInfo(request) {
+  return request.headers.has(DEBUG_HEADER);
+}
+
+function serializeLogValue(value, depth = 0) {
+  if (value == null) return value;
+  if (depth >= 5) return '[MaxDepth]';
+
+  if (value instanceof Error) {
+    return {
+      name: value.name,
+      message: value.message,
+      stack: value.stack,
+      cause: value.cause ? serializeLogValue(value.cause, depth + 1) : null,
+    };
+  }
+
+  if (value instanceof URL) {
+    return value.toString();
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => serializeLogValue(item, depth + 1));
+  }
+
+  if (typeof value === 'object') {
+    const result = {};
+    for (const [key, item] of Object.entries(value)) {
+      result[key] = serializeLogValue(item, depth + 1);
+    }
+    return result;
+  }
+
+  if (typeof value === 'function') {
+    return `[Function ${value.name || 'anonymous'}]`;
+  }
+
+  return value;
+}
+
+function pushRequestLog(logs, phase, message, detail = undefined) {
+  const entry = {
+    time: new Date().toISOString(),
+    phase,
+    message,
+  };
+
+  if (detail !== undefined) {
+    entry.detail = serializeLogValue(detail);
+  }
+
+  logs.push(entry);
+}
+
+function createJsonErrorResponse(status, payload, logs = [], exposeDebugInfo = false) {
+  if (!exposeDebugInfo) {
+    return new Response(JSON.stringify(GENERIC_ERROR_RESPONSE_BODY), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+
+  const responsePayload = { ...payload };
+  if (logs.length > 0) {
+    responsePayload.logs = logs;
+  }
+
+  return new Response(JSON.stringify(responsePayload, null, 2), {
+    status,
+    headers: { 'Content-Type': 'application/json' }
+  });
 }
 
 // =================================================================
@@ -236,6 +341,16 @@ function buildUpstreamHostHeader(target, protocol) {
   return `${hostname}:${port}`;
 }
 
+function isEventStreamRequest(request) {
+  const accept = request.headers.get('accept') || '';
+  return accept.toLowerCase().includes('text/event-stream');
+}
+
+function isEventStreamResponse(response) {
+  const contentType = response.headers.get('content-type') || '';
+  return contentType.toLowerCase().includes('text/event-stream');
+}
+
 // Update metrics cache and KV storage
 async function updateMetrics(cache, host, status, latency, reason = null) {
   const key = new Request(`https://${host}/_metric`);
@@ -307,16 +422,32 @@ async function getSortedCandidates(targets, cache) {
 }
 
 // Probe a single target (ported from worker.js)
-async function probeTarget(target, request, originalUrl, isWebSocket, signal) {
+async function probeTarget(target, request, originalUrl, isWebSocket, signal, addLog = null) {
   try {
     const upstreamUrl = new URL(originalUrl);
     const parts = target.host.split(":");
     upstreamUrl.hostname = parts[0];
     if (parts[1]) upstreamUrl.port = parts[1];
+    const eventStreamRequest = !isWebSocket && isEventStreamRequest(request);
+
+    if (addLog) {
+      addLog('probe_target_prepare_request', {
+        target: target.host,
+        targetType: target.type,
+        upstreamUrl: upstreamUrl.toString(),
+        method: request.method,
+        isWebSocket,
+        eventStreamRequest,
+      });
+    }
 
     const upstreamHeaders = sanitizeUpstreamRequestHeaders(request.headers);
     if (!isWebSocket) {
       upstreamHeaders.set('Host', buildUpstreamHostHeader(target, upstreamUrl.protocol));
+    }
+    if (eventStreamRequest) {
+      upstreamHeaders.set('Accept-Encoding', 'identity');
+      upstreamHeaders.set('Cache-Control', 'no-cache, no-transform');
     }
     
     const realClientIP = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Real-IP');
@@ -362,8 +493,22 @@ async function probeTarget(target, request, originalUrl, isWebSocket, signal) {
 
     let resp;
     try {
+      if (addLog) {
+        addLog('probe_target_fetch_start', {
+          target: target.host,
+          upstreamUrl: upstreamUrl.toString(),
+          method: request.method,
+        });
+      }
       resp = await fetch(upstreamReq);
     } catch (fetchError) {
+      if (addLog) {
+        addLog('probe_target_fetch_failed', {
+          target: target.host,
+          upstreamUrl: upstreamUrl.toString(),
+          error: fetchError,
+        });
+      }
       return {
         ok: false,
         reason: `Fetch failed: ${fetchError.message}`,
@@ -377,6 +522,16 @@ async function probeTarget(target, request, originalUrl, isWebSocket, signal) {
           method: request.method
         }
       };
+    }
+
+    if (addLog) {
+      addLog('probe_target_fetch_completed', {
+        target: target.host,
+        upstreamUrl: upstreamUrl.toString(),
+        status: resp.status,
+        statusText: resp.statusText,
+        hasWebSocket: !!resp.webSocket,
+      });
     }
 
     if (isWebSocket) {
@@ -452,6 +607,13 @@ async function probeTarget(target, request, originalUrl, isWebSocket, signal) {
             upstreamSocket.addEventListener('error', (e) => {
               if (resolved) return;
               resolved = true;
+              if (addLog) {
+                addLog('probe_target_websocket_failed', {
+                  target: target.host,
+                  upstreamUrl: upstreamWsUrl.toString(),
+                  error: e,
+                });
+              }
               resolve({ ok: false, reason: `WebSocket connection failed: ${e.message || 'unknown error'}` });
             });
             
@@ -460,10 +622,23 @@ async function probeTarget(target, request, originalUrl, isWebSocket, signal) {
               if (resolved) return;
               resolved = true;
               try { upstreamSocket.close(); } catch {}
+              if (addLog) {
+                addLog('probe_target_websocket_timeout', {
+                  target: target.host,
+                  upstreamUrl: upstreamWsUrl.toString(),
+                });
+              }
               resolve({ ok: false, reason: 'WebSocket connection timeout' });
             }, 10000);
           });
         } catch (e) {
+          if (addLog) {
+            addLog('probe_target_websocket_error', {
+              target: target.host,
+              upstreamUrl: upstreamWsUrl.toString(),
+              error: e,
+            });
+          }
           return { ok: false, reason: `WebSocket error: ${e.message}` };
         }
       }
@@ -481,6 +656,16 @@ async function probeTarget(target, request, originalUrl, isWebSocket, signal) {
     });
 
     if (!judged.ok) {
+      if (addLog) {
+        addLog('probe_target_response_rejected', {
+          target: target.host,
+          upstreamUrl: upstreamUrl.toString(),
+          reason: judged.reason,
+          status: judged.status,
+          statusText: judged.statusText,
+          error: judged.error,
+        });
+      }
       return { 
         ok: false, 
         reason: judged.reason,
@@ -493,6 +678,20 @@ async function probeTarget(target, request, originalUrl, isWebSocket, signal) {
 
     const headers = sanitizeProxyResponseHeaders(judged.response.headers);
     headers.set('X-LB-Backend', upstreamUrl.hostname);
+    if (eventStreamRequest || isEventStreamResponse(judged.response)) {
+      headers.set('Cache-Control', 'no-cache, no-store, must-revalidate, no-transform');
+      headers.set('X-Accel-Buffering', 'no');
+      headers.delete('content-encoding');
+    }
+
+    if (addLog) {
+      addLog('probe_target_response_accepted', {
+        target: target.host,
+        upstreamUrl: upstreamUrl.toString(),
+        status: judged.response.status,
+        statusText: judged.response.statusText,
+      });
+    }
 
     return { 
       ok: true, 
@@ -506,6 +705,13 @@ async function probeTarget(target, request, originalUrl, isWebSocket, signal) {
 
   } catch (e) {
     if (e.name === 'AbortError') throw e;
+    if (addLog) {
+      addLog('probe_target_unhandled_error', {
+        target: target.host,
+        url: originalUrl.toString(),
+        error: e,
+      });
+    }
     return { 
       ok: false, 
       reason: e.message,
@@ -569,9 +775,30 @@ export async function middleware(context) {
   const { request, next, rewrite } = context;
   const url = new URL(request.url);
   const hostname = url.hostname;
+  const exposeDebugInfo = shouldExposeDebugInfo(request);
+  let phase = 'init';
+  const requestLogs = [];
+  const failedAttempts = [];
+  const addLog = exposeDebugInfo
+    ? (message, detail) => pushRequestLog(requestLogs, phase, message, detail)
+    : () => {};
+  const setPhase = (nextPhase, message, detail) => {
+    phase = nextPhase;
+    if (exposeDebugInfo) {
+      pushRequestLog(requestLogs, phase, message, detail);
+    }
+  };
+
+  addLog('request_received', {
+    url: request.url,
+    method: request.method,
+    hostname,
+    pathname: url.pathname,
+  });
 
   // Allow internal WebSocket proxy handler to run (avoid recursion in middleware)
   if (url.pathname === '/__ws_proxy') {
+    addLog('internal_websocket_proxy_passthrough');
     return next();
   }
 
@@ -579,22 +806,28 @@ export async function middleware(context) {
   const isAdmin = ADMIN_HOSTNAMES.includes(hostname) ||
                   hostname.endsWith('.edgeone.run') || 
                   hostname.endsWith('.edgeone.site');
+  addLog('request_classified', { isAdmin });
 
   if (isAdmin) {
     // Handle special endpoints for admin panel
     if (url.pathname === '/_trigger_health_check' || url.pathname === '/_health') {
       try {
+        setPhase('admin_health_entry', 'admin_health_endpoint_requested', {
+          pathname: url.pathname,
+        });
         if (typeof lb_kv === 'undefined') {
-          return new Response(JSON.stringify({ 
+          addLog('admin_health_kv_missing');
+          return createJsonErrorResponse(503, { 
             error: 'KV namespace not bound',
             message: 'Please bind KV namespace with variable name "lb_kv" in EdgeOne Pages settings'
-          }), {
-            status: 503,
-            headers: { 'Content-Type': 'application/json' }
-          });
+          }, requestLogs, exposeDebugInfo);
         }
 
+        addLog('admin_health_read_rules_start');
         const rules = await lb_kv.get('rules', { type: 'json' }) || {};
+        addLog('admin_health_read_rules_done', {
+          domainCount: Object.keys(rules).length,
+        });
         const allTargets = [];
         const domainTargets = {};
 
@@ -607,6 +840,9 @@ export async function middleware(context) {
         }
 
         if (allTargets.length === 0) {
+          addLog('admin_health_no_targets_configured', {
+            domains: Object.keys(rules),
+          });
           return new Response(JSON.stringify({ 
             message: 'No targets configured in any domain',
             domains: Object.keys(rules)
@@ -620,11 +856,19 @@ export async function middleware(context) {
 
         // Handle /_trigger_health_check
         if (url.pathname === '/_trigger_health_check') {
+          setPhase('admin_trigger_health_check', 'admin_trigger_health_check_start', {
+            domainCount: Object.keys(rules).length,
+          });
           // Run health check for all domains
           for (const [domain, rule] of Object.entries(rules)) {
             if (rule.targets && rule.targets.length > 0) {
               const healthPath = rule.healthPath || '/';
               const candidates = rule.targets.map(t => ({ target: t }));
+              addLog('admin_trigger_health_check_domain', {
+                domain,
+                targetCount: rule.targets.length,
+                healthPath,
+              });
               await runBackgroundHealthCheck(candidates, healthPath, cache);
             }
           }
@@ -678,6 +922,9 @@ export async function middleware(context) {
 
         // Handle /_health
         if (url.pathname === '/_health') {
+          setPhase('admin_health_report', 'admin_health_report_start', {
+            domainCount: Object.keys(domainTargets).length,
+          });
           const statusReport = {};
           for (const [domain, targets] of Object.entries(domainTargets)) {
             statusReport[domain] = {};
@@ -725,67 +972,82 @@ export async function middleware(context) {
         }
       } catch (error) {
         console.error('Health check error:', error);
-        return new Response(JSON.stringify({ 
-          error: 'Internal server error', 
+        const status = extractErrorStatus(error);
+        addLog('admin_health_error', { error });
+        return createJsonErrorResponse(status, { 
+          error: status === 500 ? 'Internal server error' : `HTTP ${status}`,
           message: error.message 
-        }), {
-          status: 500,
-          headers: { 'Content-Type': 'application/json' }
-        });
+        }, requestLogs, exposeDebugInfo);
       }
     }
 
     // Admin panel request -> pass through to Nuxt
+    addLog('admin_panel_passthrough');
     return next();
   }
 
   // Proxied domain request -> handle load balancing directly in middleware
   try {
     // Get rules from KV
+    setPhase('read_rules', 'proxy_read_rules_start', { hostname });
     let rules = {};
     try {
       if (typeof lb_kv === 'undefined') {
-        return new Response(JSON.stringify({ 
+        addLog('proxy_kv_missing');
+        return createJsonErrorResponse(503, { 
           error: 'KV namespace not bound',
           message: 'Please bind KV namespace with variable name "lb_kv" in EdgeOne Pages settings'
-        }), {
-          status: 503,
-          headers: { 'Content-Type': 'application/json' }
-        });
+        }, requestLogs, exposeDebugInfo);
       }
       rules = await lb_kv.get('rules', { type: 'json' }) || {};
+      addLog('proxy_read_rules_done', {
+        domainCount: Object.keys(rules).length,
+      });
     } catch (error) {
       console.error('Failed to read KV:', error);
-      return new Response(JSON.stringify({ 
+      addLog('proxy_read_rules_failed', { error });
+      return createJsonErrorResponse(503, { 
         error: 'KV storage error',
         message: error.message
-      }), {
-        status: 503,
-        headers: { 'Content-Type': 'application/json' }
-      });
+      }, requestLogs, exposeDebugInfo);
     }
 
     // Check if we have rules for this hostname
     const rule = rules[hostname];
     if (!rule) {
-      return new Response(JSON.stringify({ 
+      addLog('proxy_rule_missing', {
+        hostname,
+        availableDomains: Object.keys(rules),
+      });
+      return createJsonErrorResponse(404, { 
         error: `Domain ${hostname} not configured`,
         hostname: hostname,
         availableDomains: Object.keys(rules)
-      }), {
-        status: 404,
-        headers: { 'Content-Type': 'application/json' }
-      });
+      }, requestLogs, exposeDebugInfo);
     }
+
+    addLog('proxy_rule_loaded', {
+      hostname,
+      forceHttps: !!rule.forceHttps,
+      healthPath: rule.healthPath || '/',
+      targetCount: Array.isArray(rule.targets) ? rule.targets.length : 0,
+      platform: rule.platform || 'edgeone',
+    });
 
     // Force HTTPS redirect if configured
     if (rule.forceHttps && url.protocol === 'http:') {
+      addLog('proxy_force_https_redirect', {
+        from: request.url,
+      });
       url.protocol = 'https:';
       return Response.redirect(url.toString(), 302);
     }
 
     // Health report endpoint - return backend status (same format as worker.js)
     if (url.pathname === '/_health') {
+      setPhase('health_report', 'proxy_health_report_start', {
+        targetCount: rule.targets.length,
+      });
       const cache = await caches.open('cache-host-metrics');
       const statusReport = {};
       
@@ -833,6 +1095,9 @@ export async function middleware(context) {
 
     // Trigger health check endpoint - actively probe all backends using worker.js logic
     if (url.pathname === '/_trigger_health_check') {
+      setPhase('trigger_health_check', 'proxy_trigger_health_check_start', {
+        targetCount: rule.targets.length,
+      });
       const healthPath = rule.healthPath || '/';
       const cache = await caches.open('cache-host-metrics');
       
@@ -889,18 +1154,32 @@ export async function middleware(context) {
     // Get available targets
     const targets = rule.targets || [];
     if (targets.length === 0) {
-      return new Response(JSON.stringify({ error: 'No backend targets configured' }), {
-        status: 503,
-        headers: { 'Content-Type': 'application/json' }
-      });
+      addLog('proxy_no_targets_configured');
+      return createJsonErrorResponse(503, { error: 'No backend targets configured' }, requestLogs, exposeDebugInfo);
     }
 
     const cache = await caches.open('cache-host-metrics');
     const healthPath = rule.healthPath || '/';
     const isWebSocket = request.headers.get("Upgrade")?.toLowerCase() === "websocket";
+    addLog('proxy_request_mode', {
+      isWebSocket,
+      healthPath,
+      targetCount: targets.length,
+    });
     
     // Get sorted candidates by health status and latency
+    setPhase('load_candidates', 'proxy_load_candidates_start', {
+      targetCount: targets.length,
+    });
     const candidates = await getSortedCandidates(targets, cache);
+    addLog('proxy_load_candidates_done', candidates.map((candidate) => ({
+      host: candidate?.target?.host || null,
+      type: candidate?.target?.type || null,
+      status: candidate?.status || 'unknown',
+      latency: candidate?.latency ?? null,
+      lastChecked: candidate?.lastChecked || 0,
+      reason: candidate?.reason || null,
+    })));
 
     // WebSocket requests: delegate to Node Functions WebSocket proxy handler.
     // Middleware runtime does not provide WebSocketPair, and rewrite() does not keep WS upgraded.
@@ -912,12 +1191,13 @@ export async function middleware(context) {
       const wsTarget = wsCandidate?.target;
       
       if (!wsTarget) {
-        return new Response(JSON.stringify({ error: 'No WebSocket backend available' }), {
-          status: 503,
-          headers: { 'Content-Type': 'application/json' }
-        });
+        addLog('proxy_no_websocket_backend_available');
+        return createJsonErrorResponse(503, { error: 'No WebSocket backend available' }, requestLogs, exposeDebugInfo);
       }
 
+      setPhase('websocket_rewrite', 'proxy_websocket_rewrite_start', {
+        target: wsTarget.host,
+      });
       const proxyUrl = new URL(url);
       proxyUrl.pathname = '/__ws_proxy';
       // Pass target info directly so Node Function doesn't need KV
@@ -930,6 +1210,11 @@ export async function middleware(context) {
       // Force internal rewrite URL to https to avoid platform handshake issues.
       proxyUrl.protocol = 'https:';
 
+      addLog('proxy_websocket_rewrite_done', {
+        target: wsTarget.host,
+        rewriteUrl: proxyUrl.toString(),
+      });
+
       return rewrite(proxyUrl.toString());
     }
     
@@ -941,12 +1226,31 @@ export async function middleware(context) {
     for (const item of candidates) {
       const start = Date.now();
       const timeout = item.status === 'unhealthy' ? FAST_FAIL_TIMEOUT : REQUEST_TIMEOUT;
+      setPhase(`probe:${item.target.host}`, 'proxy_probe_start', {
+        target: item.target.host,
+        targetType: item.target.type,
+        candidateStatus: item.status,
+        timeout,
+      });
       
       try {
-        const result = await probeTarget(item.target, request.clone(), url, isWebSocket, createTimeoutSignal(timeout));
+        const result = await probeTarget(
+          item.target,
+          request.clone(),
+          url,
+          isWebSocket,
+          createTimeoutSignal(timeout),
+          addLog,
+        );
         const duration = Date.now() - start;
         
         if (result && result.ok) {
+          addLog('proxy_probe_succeeded', {
+            target: item.target.host,
+            duration,
+            isWebSocket: !!result.isWebSocket,
+            status: result.response?.status || 101,
+          });
           await updateMetrics(cache, item.target.host, 'healthy', duration);
 
           // WebSocket: return original response directly without modification
@@ -961,6 +1265,11 @@ export async function middleware(context) {
           responseHeaders.set('X-LB-Backend', item.target.host);
           responseHeaders.set('X-LB-Powered-By', 'EdgeOne-LB');
           responseHeaders.set('X-LB-Platform', rule.platform || 'edgeone');
+          if (isEventStreamRequest(request) || isEventStreamResponse(result.response)) {
+            responseHeaders.set('Cache-Control', 'no-cache, no-store, must-revalidate, no-transform');
+            responseHeaders.set('X-Accel-Buffering', 'no');
+            responseHeaders.delete('content-encoding');
+          }
           
           // Pass through the response body stream directly
           response = new Response(result.response.body, {
@@ -968,13 +1277,60 @@ export async function middleware(context) {
             statusText: result.response.statusText,
             headers: responseHeaders
           });
+          addLog('proxy_response_selected', {
+            target: item.target.host,
+            status: result.response.status,
+            statusText: result.response.statusText,
+          });
           break;
         } else {
+          addLog('proxy_probe_failed', {
+            target: item.target.host,
+            duration,
+            reason: result?.reason || 'Unknown failure',
+            status: result?.status || null,
+            statusText: result?.statusText || null,
+            error: result?.error || null,
+            errorDetail: result?.errorDetail || null,
+          });
+          failedAttempts.push({
+            target: item.target.host,
+            type: item.target.type,
+            candidateStatus: item.status,
+            timeout,
+            duration,
+            reason: result?.reason || 'Unknown failure',
+            status: result?.status || null,
+            statusText: result?.statusText || null,
+            error: result?.error || null,
+            errorDetail: result?.errorDetail || null,
+          });
           await updateMetrics(cache, item.target.host, 'unhealthy', duration, result?.reason);
         }
       } catch (e) {
         const duration = Date.now() - start;
         const reason = e.name === 'TimeoutError' ? 'Timeout' : e.message;
+        addLog('proxy_probe_threw', {
+          target: item.target.host,
+          duration,
+          reason,
+          error: e,
+        });
+        failedAttempts.push({
+          target: item.target.host,
+          type: item.target.type,
+          candidateStatus: item.status,
+          timeout,
+          duration,
+          reason,
+          status: null,
+          statusText: null,
+          error: {
+            name: e.name,
+            message: e.message,
+            stack: e.stack,
+          },
+        });
         await updateMetrics(cache, item.target.host, 'unhealthy', duration, reason);
       }
     }
@@ -987,40 +1343,51 @@ export async function middleware(context) {
 
     if (needsHealthCheck && healthPath) {
       // Fire-and-forget background health check
+      setPhase('background_health_check', 'proxy_background_health_check_scheduled', {
+        healthPath,
+      });
       runBackgroundHealthCheck(candidates, healthPath, cache).catch(() => {});
     }
 
     if (response) {
+      addLog('proxy_request_completed_successfully');
       return response;
     }
 
-    return new Response(JSON.stringify({ error: 'Service Unavailable - All backends failed' }), {
-      status: 503,
-      headers: { 'Content-Type': 'application/json' }
+    setPhase('all_backends_failed', 'proxy_all_backends_failed', {
+      attempts: failedAttempts.length,
     });
+    return createJsonErrorResponse(503, {
+      error: 'Service Unavailable - All backends failed',
+      message: 'Every candidate backend failed during proxying. See logs for the full request trace.',
+      request: {
+        url: request.url,
+        method: request.method,
+        hostname,
+        pathname: url.pathname,
+        isWebSocket,
+        healthPath,
+      },
+      attempts: failedAttempts,
+    }, requestLogs, exposeDebugInfo);
 
   } catch (error) {
     console.error('Load balancer error:', error);
-    
-    const errorContext = {
-      message: error.message,
-      name: error.name,
-      stack: error.stack,
-      url: request.url,
-      method: request.method,
-      hostname: url?.hostname,
-      pathname: url?.pathname,
-      timestamp: new Date().toISOString(),
-      cause: error.cause ? String(error.cause) : null
-    };
+    const status = extractErrorStatus(error);
+    addLog('proxy_unhandled_error', { error });
 
-    return new Response(JSON.stringify({ 
-      error: 'Internal server error', 
-      ...errorContext
-    }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' }
-    });
+    return createJsonErrorResponse(status, { 
+      error: status === 500 ? 'Internal server error' : `HTTP ${status}`,
+      message: error.message,
+      request: {
+        url: request.url,
+        method: request.method,
+        hostname: url?.hostname,
+        pathname: url?.pathname,
+      },
+      exception: serializeLogValue(error),
+      attempts: failedAttempts,
+    }, requestLogs, exposeDebugInfo);
   }
 }
 
