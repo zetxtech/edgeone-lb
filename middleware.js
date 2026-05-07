@@ -7,102 +7,6 @@
 const ADMIN_HOSTNAMES = [
   'elb.zetx.tech'
 ];
-let runtimeEnv = null;
-
-// =================================================================
-// Debug Logging (writes to KV when environment variables enable it)
-// =================================================================
-const DEBUG_LOG_KEY = 'debug:logs';
-const MAX_LOG_ENTRIES = 1000;
-
-function bindRuntimeEnv(env) {
-  if (env) {
-    runtimeEnv = env;
-  }
-}
-
-function parseBooleanLike(value) {
-  if (typeof value === 'boolean') return value;
-  if (typeof value === 'number') return value !== 0;
-  if (typeof value === 'string') {
-    return ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase());
-  }
-  return false;
-}
-
-function readRuntimeEnvValue(name) {
-  if (runtimeEnv && name in runtimeEnv) {
-    return runtimeEnv[name];
-  }
-  return undefined;
-}
-
-function getDebugSettings() {
-  const rawLevel = readRuntimeEnvValue('LB_LOG_LEVEL');
-  if (typeof rawLevel === 'string') {
-    const normalizedLevel = rawLevel.trim().toLowerCase();
-    if (normalizedLevel === 'trace') {
-      return { enabled: true, traceEnabled: true, level: 'trace' };
-    }
-    if (normalizedLevel === 'debug') {
-      return { enabled: true, traceEnabled: false, level: 'debug' };
-    }
-    if (['off', 'false', '0'].includes(normalizedLevel)) {
-      return { enabled: false, traceEnabled: false, level: 'off' };
-    }
-  }
-
-  const traceEnabled = parseBooleanLike(readRuntimeEnvValue('LB_TRACE'));
-  const debugEnabled = traceEnabled || parseBooleanLike(readRuntimeEnvValue('LB_DEBUG'));
-
-  return {
-    enabled: debugEnabled,
-    traceEnabled,
-    level: traceEnabled ? 'trace' : debugEnabled ? 'debug' : 'off',
-  };
-}
-
-async function debugLog(message, data = null, level = 'debug') {
-  try {
-    if (typeof lb_kv === 'undefined') return;
-
-    const { enabled, traceEnabled } = getDebugSettings();
-    
-    if (!enabled) {
-      return;
-    }
-    if (level === 'trace' && !traceEnabled) {
-      return;
-    }
-    
-    const timestamp = new Date().toISOString();
-    const logEntry = {
-      timestamp,
-      message: level === 'trace' ? `[TRACE] ${message}` : message,
-      data: data ? JSON.stringify(data) : null
-    };
-    
-    // Get existing logs
-    let logs = [];
-    try {
-      const existing = await lb_kv.get(DEBUG_LOG_KEY, { type: 'json' });
-      if (Array.isArray(existing)) {
-        logs = existing;
-      }
-    } catch {}
-    
-    // Add new entry and trim to max size
-    logs.unshift(logEntry);
-    if (logs.length > MAX_LOG_ENTRIES) {
-      logs = logs.slice(0, MAX_LOG_ENTRIES);
-    }
-    
-    // Save back to KV
-    await lb_kv.put(DEBUG_LOG_KEY, JSON.stringify(logs));
-  } catch (e) {
-    // Silently fail - don't break the request
-  }
-}
 
 // =================================================================
 // Utility: Create AbortSignal with timeout (compatibility wrapper)
@@ -663,16 +567,8 @@ async function runBackgroundHealthCheck(candidatesWithStats, healthPath, cache) 
 
 export async function middleware(context) {
   const { request, next, rewrite } = context;
-  bindRuntimeEnv(context.env);
   const url = new URL(request.url);
   const hostname = url.hostname;
-
-  // Trace log for every request
-  await debugLog('Incoming Request', {
-    method: request.method,
-    url: url.toString(),
-    headers: Object.fromEntries(request.headers)
-  }, 'trace');
 
   // Allow internal WebSocket proxy handler to run (avoid recursion in middleware)
   if (url.pathname === '/__ws_proxy') {
@@ -685,74 +581,6 @@ export async function middleware(context) {
                   hostname.endsWith('.edgeone.site');
 
   if (isAdmin) {
-    // Debug log endpoints
-    if (url.pathname === '/_debug/logs') {
-      try {
-        if (typeof lb_kv === 'undefined') {
-          return new Response(JSON.stringify({ error: 'KV not bound' }), {
-            status: 503,
-            headers: { 'Content-Type': 'application/json' }
-          });
-        }
-        
-        const logs = await lb_kv.get(DEBUG_LOG_KEY, { type: 'json' }) || [];
-        return new Response(JSON.stringify(logs, null, 2), {
-          headers: { 
-            'Content-Type': 'application/json; charset=utf-8',
-            'Access-Control-Allow-Origin': '*'
-          }
-        });
-      } catch (e) {
-        return new Response(JSON.stringify({ error: e.message }), {
-          status: 500,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-    }
-    
-    if (url.pathname === '/_debug/enable') {
-      return new Response(JSON.stringify({
-        error: 'Debug level is controlled by environment variables',
-        configSource: 'env',
-        ...getDebugSettings(),
-      }), {
-        status: 409,
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-    
-    if (url.pathname === '/_debug/disable') {
-      return new Response(JSON.stringify({
-        error: 'Debug level is controlled by environment variables',
-        configSource: 'env',
-        ...getDebugSettings(),
-      }), {
-        status: 409,
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-    
-    if (url.pathname === '/_debug/clear') {
-      try {
-        if (typeof lb_kv === 'undefined') {
-          return new Response(JSON.stringify({ error: 'KV not bound' }), {
-            status: 503,
-            headers: { 'Content-Type': 'application/json' }
-          });
-        }
-        
-        await lb_kv.delete(DEBUG_LOG_KEY);
-        return new Response(JSON.stringify({ status: 'Debug logs cleared' }), {
-          headers: { 'Content-Type': 'application/json' }
-        });
-      } catch (e) {
-        return new Response(JSON.stringify({ error: e.message }), {
-          status: 500,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-    }
-
     // Handle special endpoints for admin panel
     if (url.pathname === '/_trigger_health_check' || url.pathname === '/_health') {
       try {
@@ -792,8 +620,6 @@ export async function middleware(context) {
 
         // Handle /_trigger_health_check
         if (url.pathname === '/_trigger_health_check') {
-          await debugLog('Manual health check triggered', { source: 'admin-panel' });
-
           // Run health check for all domains
           for (const [domain, rule] of Object.entries(rules)) {
             if (rule.targets && rule.targets.length > 0) {
@@ -841,8 +667,6 @@ export async function middleware(context) {
               };
             }));
           }
-
-          await debugLog('Health check completed', { report: statusReport });
 
           return new Response(JSON.stringify(statusReport, null, 2), {
             headers: { 
@@ -1077,21 +901,6 @@ export async function middleware(context) {
     
     // Get sorted candidates by health status and latency
     const candidates = await getSortedCandidates(targets, cache);
-    
-    await debugLog('Request received', {
-      hostname,
-      path: url.pathname,
-      method: request.method,
-      isWebSocket,
-      upgradeHeader: request.headers.get("Upgrade"),
-      candidatesCount: candidates.length,
-      clientIP: request.headers.get('CF-Connecting-IP') || request.headers.get('X-Real-IP'),
-      sortedCandidates: candidates.map(c => ({
-        host: c.target.host,
-        status: c.status,
-        latency: c.latency
-      }))
-    });
 
     // WebSocket requests: delegate to Node Functions WebSocket proxy handler.
     // Middleware runtime does not provide WebSocketPair, and rewrite() does not keep WS upgraded.
@@ -1103,42 +912,11 @@ export async function middleware(context) {
       const wsTarget = wsCandidate?.target;
       
       if (!wsTarget) {
-        await debugLog('WebSocket: No target available', { hostname, candidatesCount: candidates.length });
         return new Response(JSON.stringify({ error: 'No WebSocket backend available' }), {
           status: 503,
           headers: { 'Content-Type': 'application/json' }
         });
       }
-
-      // Log all candidates for debugging
-      await debugLog('WebSocket: All candidates', {
-        hostname,
-        candidates: candidates.map(c => ({
-          host: c.target.host,
-          type: c.target.type,
-          status: c.status,
-          latency: c.latency,
-          lastChecked: c.lastChecked
-        }))
-      });
-
-      // Warn if selected target is unhealthy
-      if (wsCandidate.status === 'unhealthy') {
-        await debugLog('WebSocket: WARNING - Selected unhealthy target', {
-          target: wsTarget.host,
-          reason: 'All targets are unhealthy, using best available'
-        });
-      }
-
-      await debugLog('WebSocket request detected (delegating to Node Function)', {
-        url: url.toString(),
-        hostname,
-        path: url.pathname,
-        candidatesCount: candidates.length,
-        selectedTarget: wsTarget.host,
-        selectedStatus: wsCandidate.status,
-        selectedLatency: wsCandidate.latency
-      });
 
       const proxyUrl = new URL(url);
       proxyUrl.pathname = '/__ws_proxy';
@@ -1151,15 +929,6 @@ export async function middleware(context) {
       // In some environments, request.url may be represented as http even when the external scheme is https/wss.
       // Force internal rewrite URL to https to avoid platform handshake issues.
       proxyUrl.protocol = 'https:';
-
-      await debugLog('WebSocket rewrite URL', {
-        originalUrl: url.toString(),
-        proxyUrl: proxyUrl.toString(),
-        target: wsTarget.host,
-        targetType: wsTarget.type,
-        candidateStatus: wsCandidate.status,
-        candidateLatency: wsCandidate.latency
-      });
 
       return rewrite(proxyUrl.toString());
     }
@@ -1174,27 +943,11 @@ export async function middleware(context) {
       const timeout = item.status === 'unhealthy' ? FAST_FAIL_TIMEOUT : REQUEST_TIMEOUT;
       
       try {
-        await debugLog('Attempting connection', { 
-          target: item.target.host, 
-          timeout,
-          status: item.status,
-          url: url.toString()
-        });
-
         const result = await probeTarget(item.target, request.clone(), url, isWebSocket, createTimeoutSignal(timeout));
         const duration = Date.now() - start;
         
         if (result && result.ok) {
           await updateMetrics(cache, item.target.host, 'healthy', duration);
-      
-          await debugLog('Connection successful', {
-            target: item.target.host,
-            duration,
-            status: result.response.status,
-            contentLength: result.response.headers.get('content-length'),
-            contentType: result.response.headers.get('content-type'),
-            transferEncoding: result.response.headers.get('transfer-encoding')
-          });
 
           // WebSocket: return original response directly without modification
           // Wrapping WebSocket 101 response would break the connection
@@ -1217,30 +970,11 @@ export async function middleware(context) {
           });
           break;
         } else {
-          await debugLog('Connection failed', {
-            target: item.target.host,
-            duration,
-            reason: result?.reason,
-            errorDetail: result?.errorDetail,
-            requestUrl: url.toString(),
-            method: request.method
-          });
           await updateMetrics(cache, item.target.host, 'unhealthy', duration, result?.reason);
         }
       } catch (e) {
         const duration = Date.now() - start;
         const reason = e.name === 'TimeoutError' ? 'Timeout' : e.message;
-        
-        await debugLog('Connection error', {
-          target: item.target.host,
-          duration,
-          error: reason,
-          errorName: e.name,
-          stack: e.stack,
-          requestUrl: url.toString(),
-          method: request.method
-        });
-        
         await updateMetrics(cache, item.target.host, 'unhealthy', duration, reason);
       }
     }
@@ -1257,19 +991,8 @@ export async function middleware(context) {
     }
 
     if (response) {
-      await debugLog('Returning response to client', {
-        status: response.status,
-        hasBody: !!response.body,
-        headers: Object.fromEntries(response.headers)
-      });
       return response;
     }
-
-    await debugLog('All backends failed', {
-      hostname,
-      candidatesCount: candidates.length,
-      targets: candidates.map(c => ({ host: c.target.host, status: c.status }))
-    });
 
     return new Response(JSON.stringify({ error: 'Service Unavailable - All backends failed' }), {
       status: 503,
@@ -1290,8 +1013,6 @@ export async function middleware(context) {
       timestamp: new Date().toISOString(),
       cause: error.cause ? String(error.cause) : null
     };
-    
-    await debugLog('Critical Internal Error', errorContext);
 
     return new Response(JSON.stringify({ 
       error: 'Internal server error', 
