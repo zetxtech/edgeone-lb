@@ -62,6 +62,52 @@ function buildUpstreamWsUrl(targetHost, originalUrl, originalPath, originalSearc
   return base.toString();
 }
 
+function sanitizeUpstreamWebSocketHeaders(headers) {
+  const sanitized = new Headers(headers || undefined);
+  const hopByHopHeaders = [
+    'connection',
+    'keep-alive',
+    'proxy-authenticate',
+    'proxy-authorization',
+    'te',
+    'trailer',
+    'transfer-encoding',
+    'upgrade',
+  ];
+  const platformHeaders = [
+    'cdn-loop',
+    'eo-pages-dataset',
+    'eo-pages-language',
+    'x-nws-log-uuid',
+    'cf-connecting-ip',
+    'cf-ipcountry',
+    'cf-ray',
+  ];
+  const wsManagedHeaders = [
+    'content-length',
+    'host',
+    'origin',
+    'sec-websocket-extensions',
+    'sec-websocket-key',
+    'sec-websocket-protocol',
+    'sec-websocket-version',
+  ];
+
+  for (const header of hopByHopHeaders) {
+    sanitized.delete(header);
+  }
+
+  for (const header of platformHeaders) {
+    sanitized.delete(header);
+  }
+
+  for (const header of wsManagedHeaders) {
+    sanitized.delete(header);
+  }
+
+  return sanitized;
+}
+
 const PROXY_VERSION = 'ws-proxy-v3';
 
 async function onRequest(context) {
@@ -201,16 +247,24 @@ function createProxyHandler(upstreamUrl, targetHost) {
       }
 
       const clientProtocol = request?.headers?.get?.('sec-websocket-protocol') || request?.headers?.get?.('Sec-WebSocket-Protocol') || undefined;
+      const clientOrigin = request?.headers?.get?.('origin') || request?.headers?.get?.('Origin') || undefined;
+      const forwardedHeaders = sanitizeUpstreamWebSocketHeaders(request?.headers);
+      const forwardedHeaderObject = Object.fromEntries(forwardedHeaders.entries());
 
       try {
         if (isWsLibrary) {
           const options = {
             handshakeTimeout: 10000,
             perMessageDeflate: false,
-            headers: {
-              'User-Agent': 'EdgeOne-LB-WS-Proxy'
-            }
           };
+
+          if (clientOrigin) {
+            options.origin = clientOrigin;
+          }
+
+          if (Object.keys(forwardedHeaderObject).length > 0) {
+            options.headers = forwardedHeaderObject;
+          }
 
           upstream = clientProtocol
             ? new upstreamCtor(upstreamUrl, clientProtocol, options)

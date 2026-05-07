@@ -341,14 +341,24 @@ function buildUpstreamHostHeader(target, protocol) {
   return `${hostname}:${port}`;
 }
 
-function isEventStreamRequest(request) {
-  const accept = request.headers.get('accept') || '';
-  return accept.toLowerCase().includes('text/event-stream');
-}
+function createStreamingProxyResponse(response, injectedHeaders = {}) {
+  const headers = sanitizeProxyResponseHeaders(response.headers);
 
-function isEventStreamResponse(response) {
-  const contentType = response.headers.get('content-type') || '';
-  return contentType.toLowerCase().includes('text/event-stream');
+  for (const [key, value] of Object.entries(injectedHeaders)) {
+    if (value != null) {
+      headers.set(key, value);
+    }
+  }
+
+  const body = response.body
+    ? response.body.pipeThrough(new TransformStream())
+    : null;
+
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }
 
 // Update metrics cache and KV storage
@@ -428,7 +438,7 @@ async function probeTarget(target, request, originalUrl, isWebSocket, signal, ad
     const parts = target.host.split(":");
     upstreamUrl.hostname = parts[0];
     if (parts[1]) upstreamUrl.port = parts[1];
-    const eventStreamRequest = !isWebSocket && isEventStreamRequest(request);
+    const streamingRequest = !isWebSocket;
 
     if (addLog) {
       addLog('probe_target_prepare_request', {
@@ -437,7 +447,7 @@ async function probeTarget(target, request, originalUrl, isWebSocket, signal, ad
         upstreamUrl: upstreamUrl.toString(),
         method: request.method,
         isWebSocket,
-        eventStreamRequest,
+        streamingRequest,
       });
     }
 
@@ -445,7 +455,7 @@ async function probeTarget(target, request, originalUrl, isWebSocket, signal, ad
     if (!isWebSocket) {
       upstreamHeaders.set('Host', buildUpstreamHostHeader(target, upstreamUrl.protocol));
     }
-    if (eventStreamRequest) {
+    if (streamingRequest) {
       upstreamHeaders.set('Accept-Encoding', 'identity');
       upstreamHeaders.set('Cache-Control', 'no-cache, no-transform');
     }
@@ -479,17 +489,20 @@ async function probeTarget(target, request, originalUrl, isWebSocket, signal, ad
       upstreamHeaders.set('Host', buildUpstreamHostHeader(target, upstreamUrl.protocol));
     }
 
-    const requestBody = isWebSocket || request.method === 'GET' || request.method === 'HEAD'
-      ? undefined
-      : request.body;
-
-    const upstreamReq = new Request(upstreamUrl, {
+    const requestBody = isWebSocket ? undefined : (request.body ?? undefined);
+    const upstreamRequestInit = {
       method: request.method,
       headers: upstreamHeaders,
-      body: requestBody,
       redirect: "manual",
-      signal: signal
-    });
+      signal: signal,
+    };
+
+    if (requestBody !== undefined) {
+      upstreamRequestInit.body = requestBody;
+      upstreamRequestInit.duplex = 'half';
+    }
+
+    const upstreamReq = new Request(upstreamUrl, upstreamRequestInit);
 
     let resp;
     try {
@@ -676,14 +689,6 @@ async function probeTarget(target, request, originalUrl, isWebSocket, signal, ad
       };
     }
 
-    const headers = sanitizeProxyResponseHeaders(judged.response.headers);
-    headers.set('X-LB-Backend', upstreamUrl.hostname);
-    if (eventStreamRequest || isEventStreamResponse(judged.response)) {
-      headers.set('Cache-Control', 'no-cache, no-store, must-revalidate, no-transform');
-      headers.set('X-Accel-Buffering', 'no');
-      headers.delete('content-encoding');
-    }
-
     if (addLog) {
       addLog('probe_target_response_accepted', {
         target: target.host,
@@ -695,12 +700,8 @@ async function probeTarget(target, request, originalUrl, isWebSocket, signal, ad
 
     return { 
       ok: true, 
-      response: new Response(judged.response.body, {
-        status: judged.response.status,
-        statusText: judged.response.statusText,
-        headers: headers,
-      }),
-      isWebSocket: false
+      response: judged.response,
+      isWebSocket: false,
     };
 
   } catch (e) {
@@ -1259,23 +1260,12 @@ export async function middleware(context) {
             response = result.response;
             break;
           }
-          
-          // HTTP: Add custom headers
-          const responseHeaders = sanitizeProxyResponseHeaders(result.response.headers);
-          responseHeaders.set('X-LB-Backend', item.target.host);
-          responseHeaders.set('X-LB-Powered-By', 'EdgeOne-LB');
-          responseHeaders.set('X-LB-Platform', rule.platform || 'edgeone');
-          if (isEventStreamRequest(request) || isEventStreamResponse(result.response)) {
-            responseHeaders.set('Cache-Control', 'no-cache, no-store, must-revalidate, no-transform');
-            responseHeaders.set('X-Accel-Buffering', 'no');
-            responseHeaders.delete('content-encoding');
-          }
-          
-          // Pass through the response body stream directly
-          response = new Response(result.response.body, {
-            status: result.response.status,
-            statusText: result.response.statusText,
-            headers: responseHeaders
+
+          response = createStreamingProxyResponse(result.response, {
+            'X-LB-Backend': item.target.host,
+            'X-LB-Powered-By': 'EdgeOne-LB',
+            'X-LB-Platform': rule.platform || 'edgeone',
+            'X-Accel-Buffering': 'no',
           });
           addLog('proxy_response_selected', {
             target: item.target.host,
