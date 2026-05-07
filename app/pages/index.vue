@@ -18,15 +18,6 @@
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
             </svg>
-            Run Health Check
-          </button>
-          <button
-            @click="exportConfig"
-            class="inline-flex items-center gap-2 rounded-xl border border-slate-600/40 bg-slate-800/60 px-4 py-3 text-sm font-medium text-slate-200 transition hover:border-cyan-400/40 hover:text-white"
-          >
-            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 16V4m0 12l-4-4m4 4l4-4m5 8H3" />
-            </svg>
             Export Config
           </button>
           <button
@@ -38,6 +29,24 @@
             </svg>
             Add Domain
           </button>
+        </div>
+      </section>
+
+      <section class="mb-8 rounded-2xl border-cyan-500/20 bg-slate-800/50 p-5 backdrop-blur-sm">
+        <div class="mb-1 text-xs font-medium uppercase tracking-[0.25em] text-cyan-400">Update All Health Checks</div>
+        <p class="mb-4 text-sm text-slate-400">
+          Trigger health checks for all configured domains and return the latest results.
+        </p>
+        <div
+          tabindex="0"
+          @click="copyToClipboard(globalTriggerHealthCheckUrl)"
+          @keydown.enter.prevent="copyToClipboard(globalTriggerHealthCheckUrl)"
+          @keydown.space.prevent="copyToClipboard(globalTriggerHealthCheckUrl)"
+          class="group flex cursor-pointer items-center justify-between gap-3 rounded-xl border-cyan-500/20 bg-cyan-500/5 px-4 py-3 transition hover:border-cyan-400/40 hover:bg-cyan-500/10"
+          :title="`Copy: ${globalTriggerHealthCheckUrl}`"
+        >
+          <code class="min-w-0 flex-1 truncate font-mono text-sm text-cyan-300">{{ globalTriggerHealthCheckUrl }}</code>
+          <span class="shrink-0 text-xs font-medium text-cyan-400 transition group-hover:text-cyan-300">Copy</span>
         </div>
       </section>
 
@@ -101,29 +110,39 @@
                   </span>
                 </div>
 
-                <div class="rounded-xl border border-slate-700/40 bg-slate-900/50 p-3">
-                  <div class="mb-1.5 text-xs text-slate-400">Health Report Endpoint</div>
-                  <div class="flex flex-wrap gap-2">
-                    <button
-                      @click="copyToClipboard(`https://${domain}/_health`)"
-                      class="inline-flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 font-mono text-xs text-emerald-300 transition hover:bg-emerald-500/20"
-                      :title="`Copy: https://${domain}/_health`"
-                    >
-                      <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                      </svg>
-                      https://{{ domain }}/_health
-                    </button>
-                    <button
-                      @click="copyToClipboard(`https://${domain}/_trigger_health_check`)"
-                      class="inline-flex items-center gap-2 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-3 py-1.5 font-mono text-xs text-cyan-300 transition hover:bg-cyan-500/20"
-                      :title="`Copy: https://${domain}/_trigger_health_check`"
-                    >
-                      <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                      </svg>
-                      https://{{ domain }}/_trigger_health_check
-                    </button>
+                <div class="rounded-xl border-slate-700/40 bg-slate-900/50 p-3">
+                  <div class="mb-3 text-xs text-slate-400">Health Check URLs</div>
+                  <div class="space-y-3">
+                    <div>
+                      <div class="mb-1 text-[11px] uppercase tracking-[0.2em] text-emerald-400">Cached Status</div>
+                      <p class="mb-2 text-xs text-slate-500">Shows the current cached health result.</p>
+                      <div
+                        tabindex="0"
+                        @click="copyToClipboard(`https://${domain}/_health`)"
+                        @keydown.enter.prevent="copyToClipboard(`https://${domain}/_health`)"
+                        @keydown.space.prevent="copyToClipboard(`https://${domain}/_health`)"
+                        class="group flex cursor-pointer items-center justify-between gap-3 rounded-lg border-emerald-500/20 bg-emerald-500/5 px-3 py-2 transition hover:border-emerald-400/40 hover:bg-emerald-500/10"
+                        :title="`Copy: https://${domain}/_health`"
+                      >
+                        <code class="min-w-0 flex-1 truncate font-mono text-xs text-emerald-300">https://{{ domain }}/_health</code>
+                        <span class="shrink-0 text-[11px] font-medium text-emerald-400 transition group-hover:text-emerald-300">Copy</span>
+                      </div>
+                    </div>
+                    <div>
+                      <div class="mb-1 text-[11px] uppercase tracking-[0.2em] text-cyan-400">Trigger And Refresh</div>
+                      <p class="mb-2 text-xs text-slate-500">Triggers a new health check and returns the latest result.</p>
+                      <div
+                        tabindex="0"
+                        @click="copyToClipboard(`https://${domain}/_trigger_health_check`)"
+                        @keydown.enter.prevent="copyToClipboard(`https://${domain}/_trigger_health_check`)"
+                        @keydown.space.prevent="copyToClipboard(`https://${domain}/_trigger_health_check`)"
+                        class="group flex cursor-pointer items-center justify-between gap-3 rounded-lg border-cyan-500/20 bg-cyan-500/5 px-3 py-2 transition hover:border-cyan-400/40 hover:bg-cyan-500/10"
+                        :title="`Copy: https://${domain}/_trigger_health_check`"
+                      >
+                        <code class="min-w-0 flex-1 truncate font-mono text-xs text-cyan-300">https://{{ domain }}/_trigger_health_check</code>
+                        <span class="shrink-0 text-[11px] font-medium text-cyan-400 transition group-hover:text-cyan-300">Copy</span>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -368,12 +387,18 @@ const targetForm = ref({
   type: 'frp',
 })
 
+const requestUrl = useRequestURL()
+
 const totalTargets = computed(() => {
   return Object.values(rules.value).reduce((sum, rule) => sum + (rule.targets?.length || 0), 0)
 })
 
 const forceHttpsCount = computed(() => {
   return Object.values(rules.value).filter((rule) => rule.forceHttps).length
+})
+
+const globalTriggerHealthCheckUrl = computed(() => {
+  return new URL('/_trigger_health_check', requestUrl.origin).toString()
 })
 
 onMounted(async () => {
@@ -385,15 +410,6 @@ async function loadRules() {
     rules.value = await $fetch('/api/rules')
   } catch (e) {
     console.error('Failed to load rules:', e)
-  }
-}
-
-async function triggerHealthCheck() {
-  try {
-    await $fetch('/_trigger_health_check')
-  } catch (e) {
-    console.error('Failed to trigger health check:', e)
-    alert('Failed to trigger health check: ' + e.message)
   }
 }
 
