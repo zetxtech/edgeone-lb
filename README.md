@@ -77,6 +77,11 @@ edgeone pages deploy
 | 变量名 | 说明 | 默认值 |
 |--------|------|--------|
 | `ADMIN_HOSTNAME` | 管理面板域名 | `*.edgeone.run` / `*.edgeone.site` |
+| `LB_LOG_LEVEL` | 调试日志级别，支持 `off` / `debug` / `trace` | `off` |
+| `LB_DEBUG` | 启用调试日志的布尔开关，未设置 `LB_LOG_LEVEL` 时生效 | `false` |
+| `LB_TRACE` | 启用全量 Trace 日志的布尔开关，未设置 `LB_LOG_LEVEL` 时生效 | `false` |
+
+调试开关不再写入 KV，管理面板中的状态只用于展示当前环境变量配置。
 
 ## 本地开发
 

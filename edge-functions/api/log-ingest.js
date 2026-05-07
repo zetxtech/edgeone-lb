@@ -1,5 +1,36 @@
 
-export async function onRequestPost({ request }) {
+function parseBooleanLike(value) {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  if (typeof value === 'string') {
+    return ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase());
+  }
+  return false;
+}
+
+function readEnvValue(env, name) {
+  if (env && name in env) {
+    return env[name];
+  }
+  return undefined;
+}
+
+function isDebugEnabled(env) {
+  const rawLevel = readEnvValue(env, 'LB_LOG_LEVEL');
+  if (typeof rawLevel === 'string') {
+    const normalizedLevel = rawLevel.trim().toLowerCase();
+    if (normalizedLevel === 'debug' || normalizedLevel === 'trace') {
+      return true;
+    }
+    if (['off', 'false', '0'].includes(normalizedLevel)) {
+      return false;
+    }
+  }
+
+  return parseBooleanLike(readEnvValue(env, 'LB_TRACE')) || parseBooleanLike(readEnvValue(env, 'LB_DEBUG'));
+}
+
+export async function onRequestPost({ request, env }) {
   try {
     if (typeof lb_kv === 'undefined') {
       return new Response(JSON.stringify({ error: 'KV not bound' }), { status: 500 });
@@ -8,8 +39,7 @@ export async function onRequestPost({ request }) {
     const body = await request.json();
     const { message, data, source } = body;
     
-    const debugEnabled = await lb_kv.get('config:debug');
-    if (debugEnabled !== 'true') {
+    if (!isDebugEnabled(env)) {
       return new Response(JSON.stringify({ skipped: true }), { status: 200 });
     }
 

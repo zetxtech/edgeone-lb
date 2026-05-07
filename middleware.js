@@ -7,31 +7,71 @@
 const ADMIN_HOSTNAMES = [
   'elb.zetx.tech'
 ];
+let runtimeEnv = null;
 
 // =================================================================
-// Debug Logging (writes to KV when LB_DEBUG env var is set)
+// Debug Logging (writes to KV when environment variables enable it)
 // =================================================================
 const DEBUG_LOG_KEY = 'debug:logs';
 const MAX_LOG_ENTRIES = 1000;
 
+function bindRuntimeEnv(env) {
+  if (env) {
+    runtimeEnv = env;
+  }
+}
+
+function parseBooleanLike(value) {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  if (typeof value === 'string') {
+    return ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase());
+  }
+  return false;
+}
+
+function readRuntimeEnvValue(name) {
+  if (runtimeEnv && name in runtimeEnv) {
+    return runtimeEnv[name];
+  }
+  return undefined;
+}
+
+function getDebugSettings() {
+  const rawLevel = readRuntimeEnvValue('LB_LOG_LEVEL');
+  if (typeof rawLevel === 'string') {
+    const normalizedLevel = rawLevel.trim().toLowerCase();
+    if (normalizedLevel === 'trace') {
+      return { enabled: true, traceEnabled: true, level: 'trace' };
+    }
+    if (normalizedLevel === 'debug') {
+      return { enabled: true, traceEnabled: false, level: 'debug' };
+    }
+    if (['off', 'false', '0'].includes(normalizedLevel)) {
+      return { enabled: false, traceEnabled: false, level: 'off' };
+    }
+  }
+
+  const traceEnabled = parseBooleanLike(readRuntimeEnvValue('LB_TRACE'));
+  const debugEnabled = traceEnabled || parseBooleanLike(readRuntimeEnvValue('LB_DEBUG'));
+
+  return {
+    enabled: debugEnabled,
+    traceEnabled,
+    level: traceEnabled ? 'trace' : debugEnabled ? 'debug' : 'off',
+  };
+}
+
 async function debugLog(message, data = null, level = 'debug') {
-  // Check if debug mode is enabled via environment variable
-  // In EdgeOne Pages, we check for a KV key instead
   try {
     if (typeof lb_kv === 'undefined') return;
+
+    const { enabled, traceEnabled } = getDebugSettings();
     
-    const debugEnabled = await lb_kv.get('config:debug');
-    const traceEnabled = await lb_kv.get('config:trace');
-    
-    // If trace is enabled, log everything.
-    // If debug is enabled, log everything except 'trace' level.
-    // If neither, log nothing.
-    
-    if (traceEnabled === 'true') {
-      // Log everything
-    } else if (debugEnabled === 'true') {
-      if (level === 'trace') return;
-    } else {
+    if (!enabled) {
+      return;
+    }
+    if (level === 'trace' && !traceEnabled) {
       return;
     }
     
@@ -248,6 +288,50 @@ function sanitizeProxyResponseHeaders(headers) {
   return sanitized;
 }
 
+function sanitizeUpstreamRequestHeaders(headers) {
+  const sanitized = new Headers(headers);
+  const hopByHopHeaders = [
+    'connection',
+    'keep-alive',
+    'proxy-authenticate',
+    'proxy-authorization',
+    'te',
+    'trailer',
+    'transfer-encoding',
+    'upgrade',
+  ];
+  const platformHeaders = [
+    'cdn-loop',
+    'eo-pages-dataset',
+    'eo-pages-language',
+    'x-nws-log-uuid',
+    'cf-connecting-ip',
+    'cf-ipcountry',
+    'cf-ray',
+  ];
+
+  for (const header of hopByHopHeaders) {
+    sanitized.delete(header);
+  }
+
+  for (const header of platformHeaders) {
+    sanitized.delete(header);
+  }
+
+  sanitized.delete('content-length');
+
+  return sanitized;
+}
+
+function buildUpstreamHostHeader(target, protocol) {
+  const [hostname, port] = target.host.split(':');
+  if (!port) return hostname;
+  if ((protocol === 'https:' && port === '443') || (protocol === 'http:' && port === '80')) {
+    return hostname;
+  }
+  return `${hostname}:${port}`;
+}
+
 // Update metrics cache and KV storage
 async function updateMetrics(cache, host, status, latency, reason = null) {
   const key = new Request(`https://${host}/_metric`);
@@ -326,9 +410,9 @@ async function probeTarget(target, request, originalUrl, isWebSocket, signal) {
     upstreamUrl.hostname = parts[0];
     if (parts[1]) upstreamUrl.port = parts[1];
 
-    const upstreamHeaders = new Headers(request.headers);
+    const upstreamHeaders = sanitizeUpstreamRequestHeaders(request.headers);
     if (!isWebSocket) {
-      upstreamHeaders.set('Host', target.host);
+      upstreamHeaders.set('Host', buildUpstreamHostHeader(target, upstreamUrl.protocol));
     }
     
     const realClientIP = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Real-IP');
@@ -357,13 +441,17 @@ async function probeTarget(target, request, originalUrl, isWebSocket, signal) {
     if (isWebSocket) {
       // For WebSocket, keep all original headers including WebSocket handshake headers
       // The runtime should handle the upgrade automatically
-      upstreamHeaders.set('Host', target.host);
+      upstreamHeaders.set('Host', buildUpstreamHostHeader(target, upstreamUrl.protocol));
     }
+
+    const requestBody = isWebSocket || request.method === 'GET' || request.method === 'HEAD'
+      ? undefined
+      : request.body;
 
     const upstreamReq = new Request(upstreamUrl, {
       method: request.method,
       headers: upstreamHeaders,
-      body: isWebSocket ? null : request.body,
+      body: requestBody,
       redirect: "manual",
       signal: signal
     });
@@ -546,24 +634,23 @@ async function runBackgroundHealthCheck(candidatesWithStats, healthPath, cache) 
 
       const req = new Request(checkUrl, {
         method: "GET",
-        headers: { "User-Agent": "EdgeOne-LB-Health-Monitor" },
-        signal: createTimeoutSignal(HEALTH_CHECK_TIMEOUT)
+        headers: { "User-Agent": "EdgeOne-LB-Health-Monitor" }
       });
 
-      const resp = await fetch(req);
       const duration = Date.now() - start;
 
-      const judged = await judgeAndMaybeTransformResponse({
-        resp,
+      const result = await probeTarget(
         target,
-        isWebSocket: false,
-        originalUrl: checkUrl,
-      });
+        req,
+        checkUrl,
+        false,
+        createTimeoutSignal(HEALTH_CHECK_TIMEOUT)
+      );
 
-      if (judged.ok) {
+      if (result.ok) {
         await updateMetrics(cache, target.host, 'healthy', duration);
       } else {
-        await updateMetrics(cache, target.host, 'unhealthy', duration, judged.reason);
+        await updateMetrics(cache, target.host, 'unhealthy', duration, result.reason);
       }
     } catch (e) {
       const reason = e.name === 'TimeoutError' ? 'Timeout' : e.message;
@@ -576,6 +663,7 @@ async function runBackgroundHealthCheck(candidatesWithStats, healthPath, cache) 
 
 export async function middleware(context) {
   const { request, next, rewrite } = context;
+  bindRuntimeEnv(context.env);
   const url = new URL(request.url);
   const hostname = url.hostname;
 
@@ -623,46 +711,25 @@ export async function middleware(context) {
     }
     
     if (url.pathname === '/_debug/enable') {
-      try {
-        if (typeof lb_kv === 'undefined') {
-          return new Response(JSON.stringify({ error: 'KV not bound' }), {
-            status: 503,
-            headers: { 'Content-Type': 'application/json' }
-          });
-        }
-        
-        await lb_kv.put('config:debug', 'true');
-        return new Response(JSON.stringify({ status: 'Debug logging enabled' }), {
-          headers: { 'Content-Type': 'application/json' }
-        });
-      } catch (e) {
-        return new Response(JSON.stringify({ error: e.message }), {
-          status: 500,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
+      return new Response(JSON.stringify({
+        error: 'Debug level is controlled by environment variables',
+        configSource: 'env',
+        ...getDebugSettings(),
+      }), {
+        status: 409,
+        headers: { 'Content-Type': 'application/json' }
+      });
     }
     
     if (url.pathname === '/_debug/disable') {
-      try {
-        if (typeof lb_kv === 'undefined') {
-          return new Response(JSON.stringify({ error: 'KV not bound' }), {
-            status: 503,
-            headers: { 'Content-Type': 'application/json' }
-          });
-        }
-        
-        await lb_kv.put('config:debug', 'false');
-        await lb_kv.delete(DEBUG_LOG_KEY);
-        return new Response(JSON.stringify({ status: 'Debug logging disabled and logs cleared' }), {
-          headers: { 'Content-Type': 'application/json' }
-        });
-      } catch (e) {
-        return new Response(JSON.stringify({ error: e.message }), {
-          status: 500,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
+      return new Response(JSON.stringify({
+        error: 'Debug level is controlled by environment variables',
+        configSource: 'env',
+        ...getDebugSettings(),
+      }), {
+        status: 409,
+        headers: { 'Content-Type': 'application/json' }
+      });
     }
     
     if (url.pathname === '/_debug/clear') {

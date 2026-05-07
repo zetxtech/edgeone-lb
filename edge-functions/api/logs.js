@@ -1,18 +1,59 @@
 
-export async function onRequestGet() {
+function parseBooleanLike(value) {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  if (typeof value === 'string') {
+    return ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase());
+  }
+  return false;
+}
+
+function readEnvValue(env, name) {
+  if (env && name in env) {
+    return env[name];
+  }
+  return undefined;
+}
+
+function getDebugSettings(env) {
+  const rawLevel = readEnvValue(env, 'LB_LOG_LEVEL');
+  if (typeof rawLevel === 'string') {
+    const normalizedLevel = rawLevel.trim().toLowerCase();
+    if (normalizedLevel === 'trace') {
+      return { enabled: true, traceEnabled: true, level: 'trace' };
+    }
+    if (normalizedLevel === 'debug') {
+      return { enabled: true, traceEnabled: false, level: 'debug' };
+    }
+    if (['off', 'false', '0'].includes(normalizedLevel)) {
+      return { enabled: false, traceEnabled: false, level: 'off' };
+    }
+  }
+
+  const traceEnabled = parseBooleanLike(readEnvValue(env, 'LB_TRACE'));
+  const debugEnabled = traceEnabled || parseBooleanLike(readEnvValue(env, 'LB_DEBUG'));
+
+  return {
+    enabled: debugEnabled,
+    traceEnabled,
+    level: traceEnabled ? 'trace' : debugEnabled ? 'debug' : 'off',
+  };
+}
+
+export async function onRequestGet({ env }) {
   try {
     if (typeof lb_kv === 'undefined') {
       return new Response(JSON.stringify({ error: 'KV not bound (lb_kv is undefined)' }), { status: 500 });
     }
     const logs = await lb_kv.get('debug:logs', { type: 'json' }) || [];
-    const debugEnabled = await lb_kv.get('config:debug');
-    const traceEnabled = await lb_kv.get('config:trace');
+    const debugSettings = getDebugSettings(env);
     
     return new Response(JSON.stringify({
-      enabled: debugEnabled === 'true',
-      traceEnabled: traceEnabled === 'true',
+      enabled: debugSettings.enabled,
+      traceEnabled: debugSettings.traceEnabled,
+      level: debugSettings.level,
+      configSource: 'env',
       kv_status: 'bound',
-      debug_value: debugEnabled,
       logs: logs
     }), {
       headers: { 'Content-Type': 'application/json' }
@@ -22,21 +63,15 @@ export async function onRequestGet() {
   }
 }
 
-export async function onRequestPost({ request }) {
+export async function onRequestPost({ request, env }) {
   try {
     if (typeof lb_kv === 'undefined') {
       return new Response(JSON.stringify({ error: 'KV not bound' }), { status: 500 });
     }
 
     const body = await request.json();
-    
-    if (typeof body.enabled !== 'undefined') {
-      await lb_kv.put('config:debug', body.enabled ? 'true' : 'false');
-    }
-
-    if (typeof body.traceEnabled !== 'undefined') {
-      await lb_kv.put('config:trace', body.traceEnabled ? 'true' : 'false');
-    }
+    const debugSettings = getDebugSettings(env);
+    const attemptedConfigChange = typeof body.enabled !== 'undefined' || typeof body.traceEnabled !== 'undefined';
     
     if (body.clear) {
       await lb_kv.put('debug:logs', '[]');
@@ -60,8 +95,15 @@ export async function onRequestPost({ request }) {
       logs.unshift(logEntry);
       await lb_kv.put('debug:logs', JSON.stringify(logs));
     }
-    
-    return new Response(JSON.stringify({ success: true }), {
+
+    return new Response(JSON.stringify({
+      success: true,
+      configSource: 'env',
+      enabled: debugSettings.enabled,
+      traceEnabled: debugSettings.traceEnabled,
+      level: debugSettings.level,
+      message: attemptedConfigChange ? 'Debug level is controlled by environment variables and cannot be changed via API.' : undefined,
+    }), {
       headers: { 'Content-Type': 'application/json' }
     });
   } catch (e) {

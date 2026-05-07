@@ -213,19 +213,20 @@
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
             </svg>
             <span class="text-sm font-medium text-slate-300">Debug Logs</span>
+            <span class="text-[11px] uppercase tracking-[0.2em] text-slate-500">Env</span>
           </div>
           <div class="flex items-center gap-3">
-            <label class="flex items-center gap-2 cursor-pointer">
+            <label class="flex items-center gap-2 cursor-not-allowed opacity-60" title="Controlled by LB_LOG_LEVEL / LB_DEBUG">
               <div class="relative">
-                <input type="checkbox" v-model="debugEnabled" @change="toggleDebug" class="sr-only peer">
+                <input type="checkbox" v-model="debugEnabled" disabled class="sr-only peer">
                 <div class="w-9 h-5 bg-slate-700 rounded-full peer-checked:bg-purple-500 transition-colors"></div>
                 <div class="absolute left-1 top-1 w-3 h-3 bg-white rounded-full transition-transform peer-checked:translate-x-4"></div>
               </div>
               <span class="text-xs text-slate-400">Debug</span>
             </label>
-            <label class="flex items-center gap-2 cursor-pointer">
+            <label class="flex items-center gap-2 cursor-not-allowed opacity-60" title="Controlled by LB_LOG_LEVEL / LB_TRACE">
               <div class="relative">
-                <input type="checkbox" v-model="traceEnabled" @change="toggleTrace" class="sr-only peer">
+                <input type="checkbox" v-model="traceEnabled" disabled class="sr-only peer">
                 <div class="w-9 h-5 bg-slate-700 rounded-full peer-checked:bg-blue-500 transition-colors"></div>
                 <div class="absolute left-1 top-1 w-3 h-3 bg-white rounded-full transition-transform peer-checked:translate-x-4"></div>
               </div>
@@ -809,32 +810,6 @@ async function refreshLogs() {
     traceEnabled.value = data.traceEnabled
   } catch (e) {
     console.error('Failed to load logs:', e)
-  }
-}
-
-async function toggleDebug() {
-  try {
-    await $fetch('/api/logs', {
-      method: 'POST',
-      body: { enabled: debugEnabled.value }
-    })
-    await refreshLogs()
-  } catch (e) {
-    console.error('Failed to toggle debug:', e)
-    debugEnabled.value = !debugEnabled.value // revert on error
-  }
-}
-
-async function toggleTrace() {
-  try {
-    await $fetch('/api/logs', {
-      method: 'POST',
-      body: { traceEnabled: traceEnabled.value }
-    })
-    await refreshLogs()
-  } catch (e) {
-    console.error('Failed to toggle trace:', e)
-    traceEnabled.value = !traceEnabled.value // revert on error
   }
 }
 
