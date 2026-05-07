@@ -16,17 +16,14 @@ const DEBUG_LOG_INDEX_KEY = 'debug-log:index';
 const DEBUG_LOG_KEY_PREFIX = 'debug-log:';
 const DEBUG_LOG_RETENTION_SECONDS = 60 * 60 * 24 * 7;
 const DEBUG_LOG_MAX_RECORDS = 50;
-const LOG_HEADER_VALUE_LIMIT = 2048;
-const REDACTED_LOG_HEADERS = new Set([
+const DEBUG_LOG_HEADER_VALUE_LIMIT = 2048;
+const DEBUG_LOG_REDACTED_HEADERS = new Set([
   'authorization',
   'proxy-authorization',
   'cookie',
   'set-cookie',
 ]);
 
-// =================================================================
-// Utility: Create AbortSignal with timeout (compatibility wrapper)
-// =================================================================
 function createTimeoutSignal(timeoutMs) {
   if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
     return AbortSignal.timeout(timeoutMs);
@@ -77,7 +74,7 @@ function createDebugLogId() {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-function truncateLogText(value, maxLength = LOG_HEADER_VALUE_LIMIT) {
+function truncateLogText(value, maxLength = DEBUG_LOG_HEADER_VALUE_LIMIT) {
   const text = String(value ?? '');
   if (text.length <= maxLength) {
     return text;
@@ -94,7 +91,7 @@ function serializeHeadersForLog(headers) {
 
   for (const [key, value] of headers.entries()) {
     const lowerKey = key.toLowerCase();
-    result[key] = REDACTED_LOG_HEADERS.has(lowerKey)
+    result[key] = DEBUG_LOG_REDACTED_HEADERS.has(lowerKey)
       ? '[Redacted]'
       : truncateLogText(value);
   }
@@ -397,13 +394,6 @@ function sanitizeProxyResponseHeaders(headers) {
     sanitized.delete(header);
   }
 
-  for (const header of Array.from(sanitized.keys())) {
-    const lowerHeader = header.toLowerCase();
-    if (lowerHeader.startsWith('cf-') || lowerHeader.startsWith('eo-pages-')) {
-      sanitized.delete(header);
-    }
-  }
-
   sanitized.delete('content-length');
   sanitized.delete('content-encoding');
 
@@ -584,29 +574,122 @@ async function updateMetrics(cache, host, status, latency, reason = null) {
   }
 }
 
-// Get sorted candidates by health status and latency (ported from worker.js)
-async function getSortedCandidates(targets, cache) {
-  const statusPromises = targets.map(async (t) => {
-    const key = new Request(`https://${t.host}/_metric`);
+async function readHealthMetrics(cache, host, options = {}) {
+  const {
+    defaultValue = { status: 'unknown', latency: 9999, lastChecked: 0 },
+    addLog = null,
+    logPrefix = 'health_metrics',
+  } = options;
+
+  const key = new Request(`https://${host}/_metric`);
+  let data = { ...defaultValue };
+
+  try {
+    if (addLog) {
+      addLog(`${logPrefix}_cache_lookup_start`, {
+        target: host,
+        cacheKey: key.url,
+      });
+    }
+
     const resp = await cache.match(key);
-    let data = { status: 'unknown', latency: 9999, lastChecked: 0 };
-    
-    // Try Cache API first
+
+    if (addLog) {
+      addLog(`${logPrefix}_cache_lookup_done`, {
+        target: host,
+        cacheKey: key.url,
+        hit: !!resp,
+      });
+    }
+
     if (resp) {
-      try { data = await resp.json(); } catch {}
-    } else {
-      // Fallback to KV storage for cross-domain access
       try {
-        if (typeof lb_kv !== 'undefined') {
-          const kvData = await lb_kv.get(`health:${t.host}`, { type: 'json' });
-          if (kvData) {
-            data = kvData;
+        data = await resp.json();
+      } catch {}
+      return data;
+    }
+
+    try {
+      if (addLog) {
+        addLog(`${logPrefix}_kv_lookup_start`, {
+          target: host,
+          kvKey: `health:${host}`,
+        });
+      }
+
+      if (typeof lb_kv !== 'undefined') {
+        const kvData = await lb_kv.get(`health:${host}`, { type: 'json' });
+        if (kvData) {
+          data = kvData;
+
+          try {
+            await cache.put(key, new Response(JSON.stringify(kvData), {
+              headers: {
+                'Content-Type': 'application/json',
+                'Cache-Control': 'public, max-age=600',
+              },
+            }));
+
+            if (addLog) {
+              addLog(`${logPrefix}_cache_refill_done`, {
+                target: host,
+                cacheKey: key.url,
+                kvKey: `health:${host}`,
+              });
+            }
+          } catch (cacheWriteError) {
+            if (addLog) {
+              addLog(`${logPrefix}_cache_refill_failed`, {
+                target: host,
+                cacheKey: key.url,
+                kvKey: `health:${host}`,
+                error: cacheWriteError,
+              });
+            }
+            console.error('Failed to refill health metrics cache:', cacheWriteError);
           }
         }
-      } catch (e) {
-        console.error('Failed to read health metrics from KV:', e);
       }
+
+      if (addLog) {
+        addLog(`${logPrefix}_kv_lookup_done`, {
+          target: host,
+          kvKey: `health:${host}`,
+          found: data !== null && data.status !== defaultValue.status,
+        });
+      }
+    } catch (kvError) {
+      if (addLog) {
+        addLog(`${logPrefix}_kv_lookup_failed`, {
+          target: host,
+          kvKey: `health:${host}`,
+          error: kvError,
+        });
+      }
+      console.error('Failed to read health metrics from KV:', kvError);
     }
+  } catch (cacheError) {
+    if (addLog) {
+      addLog(`${logPrefix}_cache_lookup_failed`, {
+        target: host,
+        cacheKey: key.url,
+        error: cacheError,
+      });
+    }
+    console.error('Failed to read health metrics from cache:', cacheError);
+  }
+
+  return data;
+}
+
+// Get sorted candidates by health status and latency (ported from worker.js)
+async function getSortedCandidates(targets, cache, addLog = null) {
+  const statusPromises = targets.map(async (t) => {
+    const data = await readHealthMetrics(cache, t.host, {
+      defaultValue: { status: 'unknown', latency: 9999, lastChecked: 0 },
+      addLog,
+      logPrefix: 'candidate',
+    });
     
     return { target: t, ...data };
   });
@@ -626,7 +709,7 @@ async function getSortedCandidates(targets, cache) {
 
 // Forward a request to a single target.
 // This is shared by normal proxy traffic and explicit health checks.
-async function requestTarget(target, request, originalUrl, isWebSocket, signal, addLog = null) {
+async function requestTarget(target, request, originalUrl, isWebSocket, signal, requestMeta = {}, addLog = null) {
   try {
     const upstreamUrl = new URL(originalUrl);
     const parts = target.host.split(":");
@@ -654,9 +737,9 @@ async function requestTarget(target, request, originalUrl, isWebSocket, signal, 
       upstreamHeaders.set('Cache-Control', 'no-cache, no-transform');
     }
     
-    const realClientIP = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Real-IP');
-    const realCountry = request.headers.get('CF-IPCountry') || 'XX';
-    const cfRay = request.headers.get('CF-Ray');
+    const realClientIP = requestMeta.clientIp || '';
+    const realCountry = requestMeta.geo?.countryCodeAlpha2 || 'XX';
+    const realAsn = requestMeta.geo?.asn;
     
     if (realClientIP) {
       upstreamHeaders.set('LB-Connecting-IP', realClientIP);
@@ -672,9 +755,9 @@ async function requestTarget(target, request, originalUrl, isWebSocket, signal, 
     
     upstreamHeaders.set('X-Forwarded-Proto', originalUrl.protocol.replace(':', ''));
     upstreamHeaders.set('LB-IPCountry', realCountry);
-    
-    if (cfRay) {
-      upstreamHeaders.set('LB-Ray', cfRay);
+
+    if (realAsn != null && realAsn !== '') {
+      upstreamHeaders.set('LB-IPASN', String(realAsn));
     }
 
     if (isWebSocket) {
@@ -960,7 +1043,8 @@ async function runBackgroundHealthCheck(candidatesWithStats, healthPath, cache) 
         req,
         checkUrl,
         false,
-        createTimeoutSignal(HEALTH_CHECK_TIMEOUT)
+        createTimeoutSignal(HEALTH_CHECK_TIMEOUT),
+        {}
       );
 
       if (result.ok) {
@@ -978,7 +1062,7 @@ async function runBackgroundHealthCheck(candidatesWithStats, healthPath, cache) 
 }
 
 export async function middleware(context) {
-  const { request, next, rewrite } = context;
+  const { request, next, rewrite, geo, clientIp } = context;
   const requestStartedAt = Date.now();
   const url = new URL(request.url);
   const hostname = url.hostname;
@@ -987,6 +1071,10 @@ export async function middleware(context) {
   const debugRequestedByUserAgent = debugUserAgent.includes(DEBUG_HEADER);
   const exposeDebugInfo = shouldExposeDebugInfo(request);
   const debugLogId = exposeDebugInfo ? createDebugLogId() : null;
+  const requestMeta = {
+    clientIp: clientIp || '',
+    geo: geo || null,
+  };
   let phase = 'init';
   const requestLogs = [];
   const failedAttempts = [];
@@ -1163,27 +1251,9 @@ export async function middleware(context) {
             for (const [domain, targets] of Object.entries(domainTargets)) {
               statusReport[domain] = {};
               await Promise.all(targets.map(async (t) => {
-                const key = new Request(`https://${t.host}/_metric`);
-                const resp = await cache.match(key);
-                
-                let info = { status: 'pending', latency: null, lastChecked: null, reason: null };
-                
-                // Try Cache API first
-                if (resp) {
-                  try { info = await resp.json(); } catch {}
-                } else {
-                  // Fallback to KV storage for cross-domain access
-                  try {
-                    if (typeof lb_kv !== 'undefined') {
-                      const kvData = await lb_kv.get(`health:${t.host}`, { type: 'json' });
-                      if (kvData) {
-                        info = kvData;
-                      }
-                    }
-                  } catch (e) {
-                    console.error('Failed to read health metrics from KV:', e);
-                  }
-                }
+                const info = await readHealthMetrics(cache, t.host, {
+                  defaultValue: { status: 'pending', latency: null, lastChecked: null, reason: null },
+                });
 
                 statusReport[domain][t.host] = {
                   type: t.type,
@@ -1214,27 +1284,9 @@ export async function middleware(context) {
             for (const [domain, targets] of Object.entries(domainTargets)) {
               statusReport[domain] = {};
               await Promise.all(targets.map(async (t) => {
-                const key = new Request(`https://${t.host}/_metric`);
-                const resp = await cache.match(key);
-                
-                let info = { status: 'pending', latency: null, lastChecked: null };
-                
-                // Try Cache API first
-                if (resp) {
-                  try { info = await resp.json(); } catch {}
-                } else {
-                  // Fallback to KV storage for cross-domain access
-                  try {
-                    if (typeof lb_kv !== 'undefined') {
-                      const kvData = await lb_kv.get(`health:${t.host}`, { type: 'json' });
-                      if (kvData) {
-                        info = kvData;
-                      }
-                    }
-                  } catch (e) {
-                    console.error('Failed to read health metrics from KV:', e);
-                  }
-                }
+                const info = await readHealthMetrics(cache, t.host, {
+                  defaultValue: { status: 'pending', latency: null, lastChecked: null },
+                });
 
                 statusReport[domain][t.host] = {
                   type: t.type,
@@ -1336,27 +1388,9 @@ export async function middleware(context) {
       const statusReport = {};
       
       await Promise.all(rule.targets.map(async (t) => {
-        const key = new Request(`https://${t.host}/_metric`);
-        const resp = await cache.match(key);
-        
-        let info = { status: 'pending', latency: null, lastChecked: null };
-        
-        // Try Cache API first
-        if (resp) {
-          try { info = await resp.json(); } catch {}
-        } else {
-          // Fallback to KV storage for cross-domain access
-          try {
-            if (typeof lb_kv !== 'undefined') {
-              const kvData = await lb_kv.get(`health:${t.host}`, { type: 'json' });
-              if (kvData) {
-                info = kvData;
-              }
-            }
-          } catch (e) {
-            console.error('Failed to read health metrics from KV:', e);
-          }
-        }
+        const info = await readHealthMetrics(cache, t.host, {
+          defaultValue: { status: 'pending', latency: null, lastChecked: null },
+        });
 
         statusReport[t.host] = {
           type: t.type,
@@ -1394,27 +1428,9 @@ export async function middleware(context) {
       // Read updated metrics and return status report
       const statusReport = {};
       await Promise.all(rule.targets.map(async (t) => {
-        const key = new Request(`https://${t.host}/_metric`);
-        const resp = await cache.match(key);
-        
-        let info = { status: 'pending', latency: null, lastChecked: null, reason: null };
-        
-        // Try Cache API first
-        if (resp) {
-          try { info = await resp.json(); } catch {}
-        } else {
-          // Fallback to KV storage for cross-domain access
-          try {
-            if (typeof lb_kv !== 'undefined') {
-              const kvData = await lb_kv.get(`health:${t.host}`, { type: 'json' });
-              if (kvData) {
-                info = kvData;
-              }
-            }
-          } catch (e) {
-            console.error('Failed to read health metrics from KV:', e);
-          }
-        }
+        const info = await readHealthMetrics(cache, t.host, {
+          defaultValue: { status: 'pending', latency: null, lastChecked: null, reason: null },
+        });
 
         statusReport[t.host] = {
           type: t.type,
@@ -1442,7 +1458,22 @@ export async function middleware(context) {
       return complete(createJsonErrorResponse(503, { error: 'No backend targets configured' }, requestLogs, exposeDebugInfo));
     }
 
-    const cache = await caches.open('cache-host-metrics');
+    let cache;
+    try {
+      addLog('proxy_open_metrics_cache_start', {
+        cacheName: 'cache-host-metrics',
+      });
+      cache = await caches.open('cache-host-metrics');
+      addLog('proxy_open_metrics_cache_done', {
+        cacheName: 'cache-host-metrics',
+      });
+    } catch (error) {
+      addLog('proxy_open_metrics_cache_failed', {
+        cacheName: 'cache-host-metrics',
+        error,
+      });
+      throw error;
+    }
     const healthPath = rule.healthPath || '/';
     const isWebSocket = request.headers.get("Upgrade")?.toLowerCase() === "websocket";
     addLog('proxy_request_mode', {
@@ -1455,7 +1486,7 @@ export async function middleware(context) {
     setPhase('load_candidates', 'proxy_load_candidates_start', {
       targetCount: targets.length,
     });
-    const candidates = await getSortedCandidates(targets, cache);
+    const candidates = await getSortedCandidates(targets, cache, addLog);
     addLog('proxy_load_candidates_done', candidates.map((candidate) => ({
       host: candidate?.target?.host || null,
       type: candidate?.target?.type || null,
@@ -1524,6 +1555,7 @@ export async function middleware(context) {
           url,
           isWebSocket,
           createTimeoutSignal(timeout),
+          requestMeta,
           addLog,
         );
         const duration = Date.now() - start;
