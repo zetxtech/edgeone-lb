@@ -336,7 +336,6 @@ function handleRedirect(response, originalUrl) {
 }
 function sanitizeProxyResponseHeaders(headers) {
   const sanitized = new Headers(headers);
-  const originalContentEncoding = headers.get('content-encoding');
   const hopByHopHeaders = [
     'connection',
     'keep-alive',
@@ -358,11 +357,7 @@ function sanitizeProxyResponseHeaders(headers) {
     sanitized.delete(header);
   }
   sanitized.delete('content-length');
-  if (originalContentEncoding) {
-    sanitized.set('content-encoding', originalContentEncoding);
-  } else {
-    sanitized.set('content-encoding', 'identity');
-  }
+  sanitized.delete('content-encoding');
   return sanitized;
 }
 function sanitizeUpstreamRequestHeaders(headers) {
@@ -642,12 +637,7 @@ async function requestTarget(target, request, originalUrl, signal, requestMeta =
     }
     const upstreamHeaders = sanitizeUpstreamRequestHeaders(request.headers);
     upstreamHeaders.set('Host', buildUpstreamHostHeader(target, upstreamUrl.protocol));
-    const requestAcceptEncoding = request.headers.get('Accept-Encoding');
-    if (requestAcceptEncoding) {
-      upstreamHeaders.set('Accept-Encoding', requestAcceptEncoding);
-    } else {
-      upstreamHeaders.delete('Accept-Encoding');
-    }
+    upstreamHeaders.set('Accept-Encoding', 'identity');
     upstreamHeaders.set('Cache-Control', 'no-cache, no-transform');
     const realClientIP = requestMeta.clientIp || '';
     const realCountry = requestMeta.geo?.countryCodeAlpha2 || 'XX';
