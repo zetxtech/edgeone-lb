@@ -1,6 +1,6 @@
 # EdgeOne Load Balancer Admin Panel
 
-基于 EdgeOne Pages 的负载均衡管理面板，通过 Middleware 区分管理端和代理端。
+基于 EdgeOne Pages 的负载均衡管理面板，通过 Middleware、Edge Functions 与 Node Functions 协同处理管理端、HTTP 代理和 WebSocket 代理。
 
 ## 架构
 
@@ -9,13 +9,21 @@
 │                    EdgeOne Pages                            │
 ├─────────────────────────────────────────────────────────────┤
 │  middleware.js (Runs on Edge Nodes)                         │
-│  ├── admin.edgeone.run  ──────► next() ──────► Nuxt SSR     │
-│  └── other-domain.com   ──────► Load Balancer Logic         │
-│      └── Read rules from KV → Select backend → Proxy        │
+│  ├── admin hostname  ─────────► next() ──────► Nuxt SSR     │
+│  ├── WebSocket proxy ────────► rewrite() ───► Node Fn       │
+│  └── HTTP proxy ─────────────► rewrite() ───► Edge Fn       │
 │                                                             │
-│  edge-functions/api/                                        │
-│  └── rules/                                                 │
-│      └── CRUD API for managing rules                        │
+│  lb-proxy.js                                                │
+│  └── Shared proxy / health-check logic                      │
+│                                                             │
+│  edge-functions/                                            │
+│  ├── __proxy/[[default]].js                                 │
+│  ├── _health.js / _trigger_health_check.js                  │
+│  └── api/                                                   │
+│      └── rules / logs / export                              │
+│                                                             │
+│  node-functions/__ws_proxy/index.js                         │
+│  └── Upstream WebSocket proxy                               │
 │                                                             │
 │  KV Storage (lb_kv)                                         │
 │  └── rules: { "domain": { targets: [...], ... } }           │
@@ -24,29 +32,34 @@
 
 **架构说明：**
 
-- **Middleware 直接处理负载均衡**：所有代理域名的请求在 middleware 中直接读取 KV 规则并转发到后端，无需经过 Nuxt 或 Edge Functions
+- **Middleware 只负责分流与改写**：管理域名走 Nuxt，HTTP 代理请求 rewrite 到 Edge Functions，WebSocket 请求 rewrite 到 Node Functions
 - **管理面板使用 Nuxt**：管理域名（如 `*.edgeone.run`）的请求通过 `next()` 传递给 Nuxt 进行 SSR 渲染
-- **API 使用 Edge Functions**：规则管理 API 使用 Edge Functions 实现，提供 RESTful 接口
+- **共享代理逻辑在 lb-proxy.js**：HTTP 代理、健康检查、调试日志与 WebSocket 目标选择复用同一套规则读取与候选排序逻辑
+- **API 使用 Edge Functions**：规则管理、调试日志和导出接口都由 Edge Functions 提供
 
 ## 目录结构
 
 ```
 edgeone-lb/
-├── middleware.js              # 请求路由和负载均衡中间件
+├── middleware.js              # 请求分流与 rewrite 入口
+├── lb-proxy.js                # 共享代理与健康检查逻辑
 ├── edge-functions/
+│   ├── __proxy/              # HTTP 代理入口
+│   ├── _health.js            # 管理域名健康状态查询
+│   ├── _trigger_health_check.js
 │   └── api/
-│       ├── export.js         # 导出独立配置
+│       ├── export.js         # 导出规则快照
+│       ├── logs.js           # 调试日志 API
 │       └── rules/            # 规则管理 API
-│           ├── index.js
-│           ├── [domain].js
-│           └── [domain]/targets/
+├── node-functions/
+│   └── __ws_proxy/           # WebSocket 代理入口
 ├── app/
 │   └── pages/index.vue       # 管理界面
 ├── nuxt.config.ts
 └── package.json
 ```
 
-**注意：** `edge-functions/_lb/` 目录已移除，负载均衡逻辑现在直接在 `middleware.js` 中实现。
+**注意：** 当前 HTTP 代理主逻辑不再直接堆在 middleware.js 中，而是通过内部 rewrite 交给 edge-functions/__proxy 和共享模块 lb-proxy.js。
 
 ## 部署步骤
 
@@ -100,7 +113,7 @@ edgeone pages dev
 | DELETE | `/api/rules/:domain` | 删除域名 |
 | POST | `/api/rules/:domain/targets` | 添加后端目标 |
 | DELETE | `/api/rules/:domain/targets/:index` | 删除后端目标 |
-| GET | `/api/export` | 导出独立的 middleware.js 配置 |
+| GET | `/api/export` | 导出当前规则快照 JSON |
 
 ### 创建/更新域名规则
 
@@ -135,7 +148,7 @@ POST /api/rules
   - `tunnel`：Cloudflare Tunnel
   - `direct`：直连
 - 动态添加/删除后端目标
-- 简单轮询负载均衡
+- 按健康状态和延迟排序的串行故障转移
 
 ### ✅ 健康检查端点
 访问 `https://your-domain.com/_health` 可查看当前配置状态（从缓存读取）：
@@ -201,11 +214,11 @@ POST /api/rules
 - 用于告警和监控集成
 
 ### ✅ 配置导出
-点击 "Export Config" 按钮可导出包含所有规则的独立 `middleware.js` 文件，可部署到其他 EdgeOne Pages 项目。
+点击 "Export Rules" 按钮会下载当前规则快照 JSON，可用于备份、审计或迁移配置。
 
 ## 与原 Worker 版本的区别
 
-| 特性 | Worker 版本 (worker.js) | EdgeOne 版本 (middleware.js) |
+| 特性 | Worker 版本 (worker.js) | EdgeOne 版本 |
 |------|------------------------|------------------------------|
 | 配置方式 | 硬编码在代码中 | 存储在 KV，可通过管理面板修改 |
 | 域名管理 | 需要修改代码 | 可在线编辑，支持重命名 |
@@ -214,13 +227,13 @@ POST /api/rules
 | 健康检查触发 | `scheduled` 事件自动触发 | `/_trigger_health_check` 手动触发 |
 | 健康状态查询 | `/_health` 从缓存读取 | `/_health` 从缓存读取 |
 | 平台标识 | 无 | 自动标记 `platform: "edgeone"` |
-| 负载均衡 | 串行故障转移 + 健康度排序 | 简单轮询（不依赖健康状态） |
+| 负载均衡 | 串行故障转移 + 健康度排序 | 串行故障转移 + 健康度排序 |
 | 部署方式 | Cloudflare Workers | EdgeOne Pages |
 
 **主要差异说明：**
 - Worker 版本使用 Cron Trigger 自动定时检查，EdgeOne 版本需要外部服务触发
 - 两者都使用 Cache API 缓存健康检查结果，TTL 均为 10 分钟
-- Worker 版本的负载均衡会根据健康状态智能选择，EdgeOne 版本使用简单轮询
+- 当前 EdgeOne 版本同样会根据健康状态和延迟排序候选后端
 - 返回格式完全一致，便于迁移和监控集成
 
 ## 监控集成示例
