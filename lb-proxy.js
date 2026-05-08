@@ -413,8 +413,26 @@ function getChunkByteLength(chunk) {
   }
   return null;
 }
+function shouldDisableResponseTransform(contentType) {
+  if (!contentType) {
+    return false;
+  }
+
+  const normalizedContentType = contentType.toLowerCase();
+  return normalizedContentType.includes('text/event-stream')
+    || normalizedContentType.includes('application/grpc')
+    || normalizedContentType.includes('application/grpc-web')
+    || normalizedContentType.includes('application/x-ndjson')
+    || normalizedContentType.includes('application/stream+json');
+}
 function createStreamingProxyResponse(response, injectedHeaders = {}, options = {}) {
   const headers = sanitizeProxyResponseHeaders(response.headers);
+  const contentType = response.headers.get('content-type') || null;
+
+  if (shouldDisableResponseTransform(contentType)) {
+    headers.set('Cache-Control', 'no-cache, no-transform');
+  }
+
   for (const [key, value] of Object.entries(injectedHeaders)) {
     if (value != null) {
       headers.set(key, value);
@@ -426,7 +444,6 @@ function createStreamingProxyResponse(response, injectedHeaders = {}, options = 
     let firstUpstreamChunkObserved = false;
     let firstDownstreamChunkObserved = false;
     const streamStartedAt = Date.now();
-    const contentType = response.headers.get('content-type') || null;
     const settle = (type, detail = undefined) => {
       if (settled) {
         return;
