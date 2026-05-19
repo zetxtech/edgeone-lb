@@ -413,30 +413,6 @@ function getChunkByteLength(chunk) {
   }
   return null;
 }
-function appendVaryHeader(headers, value) {
-  const currentValue = headers.get('vary');
-  if (!currentValue) {
-    headers.set('Vary', value);
-    return;
-  }
-
-  const existingValues = currentValue
-    .split(',')
-    .map((item) => item.trim().toLowerCase())
-    .filter(Boolean);
-
-  if (!existingValues.includes(value.toLowerCase())) {
-    headers.set('Vary', `${currentValue}, ${value}`);
-  }
-}
-function shouldCompressSseWithBrotli(contentType, acceptEncoding) {
-  if (!contentType || !acceptEncoding) {
-    return false;
-  }
-
-  return contentType.toLowerCase().includes('text/event-stream')
-    && /(^|,|\s)br(,|\s|$)/i.test(acceptEncoding);
-}
 function createStreamingProxyResponse(response, injectedHeaders = {}, options = {}) {
   const headers = sanitizeProxyResponseHeaders(response.headers);
   const contentType = response.headers.get('content-type') || null;
@@ -448,12 +424,10 @@ function createStreamingProxyResponse(response, injectedHeaders = {}, options = 
   }
   let body = null;
   if (response.body) {
-    let manuallyCompressedWithBrotli = false;
     let settled = false;
     let firstUpstreamChunkObserved = false;
     let firstDownstreamChunkObserved = false;
     const streamStartedAt = Date.now();
-    let readable = response.body;
     const settle = (type, detail = undefined) => {
       if (settled) {
         return;
@@ -466,7 +440,7 @@ function createStreamingProxyResponse(response, injectedHeaders = {}, options = 
       }
     };
 
-    readable = readable.pipeThrough(new TransformStream({
+    const transformer = new TransformStream({
       transform(chunk, controller) {
         const chunkBytes = getChunkByteLength(chunk);
         if (!firstUpstreamChunkObserved && typeof options.onFirstUpstreamChunk === 'function') {
@@ -479,61 +453,29 @@ function createStreamingProxyResponse(response, injectedHeaders = {}, options = 
             });
           } catch {}
         }
-
         controller.enqueue(chunk);
-      },
-    }));
-
-    if (shouldCompressSseWithBrotli(contentType, options.clientAcceptEncoding) && typeof CompressionStream === 'function') {
-      try {
-        readable = readable.pipeThrough(new CompressionStream('brotli'));
-        headers.set('Content-Encoding', 'br');
-        appendVaryHeader(headers, 'Accept-Encoding');
-        manuallyCompressedWithBrotli = true;
-      } catch {}
-    }
-
-    const reader = readable.getReader();
-    body = new ReadableStream({
-      async pull(controller) {
-        try {
-          const { done, value } = await reader.read();
-          if (done) {
-            settle('completed');
-            controller.close();
-            return;
-          }
-
-          const chunkBytes = getChunkByteLength(value);
-          if (!firstDownstreamChunkObserved && typeof options.onFirstDownstreamChunk === 'function') {
-            firstDownstreamChunkObserved = true;
-            try {
-              options.onFirstDownstreamChunk({
-                chunkBytes,
-                contentType,
-                contentEncoding: manuallyCompressedWithBrotli ? 'br' : 'identity',
-                elapsedMs: Date.now() - streamStartedAt,
-              });
-            } catch {}
-          }
-
-          controller.enqueue(value);
-        } catch (error) {
-          if (error?.name === 'AbortError') {
-            settle('canceled', error);
-            controller.close();
-            return;
-          }
-
-          settle('errored', error);
-          controller.error(error);
+        if (!firstDownstreamChunkObserved && typeof options.onFirstDownstreamChunk === 'function') {
+          firstDownstreamChunkObserved = true;
+          try {
+            options.onFirstDownstreamChunk({
+              chunkBytes,
+              contentType,
+              elapsedMs: Date.now() - streamStartedAt,
+            });
+          } catch {}
         }
       },
-      async cancel(reason) {
-        try {
-          await reader.cancel(reason);
-        } catch {}
-      },
+    });
+    body = transformer.readable;
+    response.body.pipeTo(transformer.writable).then(() => {
+      settle('completed');
+    }).catch((error) => {
+      if (error?.name === 'AbortError') {
+        settle('canceled', error);
+        return;
+      }
+
+      settle('errored', error);
     });
   }
   return new Response(body, {
@@ -1315,7 +1257,6 @@ export async function onProxyRequest(context) {
             'X-LB-Platform': rule.platform || 'edgeone',
             'X-Accel-Buffering': 'no',
           }, {
-            clientAcceptEncoding: request.headers.get('Accept-Encoding') || '',
             onFirstUpstreamChunk: (streamResult) => {
               phase = 'response_stream';
               pushRequestLog(requestLogs, phase, 'proxy_stream_first_upstream_chunk', streamResult);
