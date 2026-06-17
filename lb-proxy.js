@@ -913,7 +913,6 @@ export async function onWebSocketProxyRequest(context) {
   const { request, rewrite } = context;
   const originalUrl = new URL(request.url);
   const hostname = originalUrl.hostname;
-  console.log('[ws-lb] onWebSocketProxyRequest', { hostname, url: request.url, upgrade: request.headers.get('upgrade') });
 
   if (isAdminHostname(hostname)) {
     return new Response('Not found', { status: 404 });
@@ -960,13 +959,10 @@ export async function onWebSocketProxyRequest(context) {
   const wsTarget = candidates[0]?.target;
 
   if (!wsTarget) {
-    console.log('[ws-lb] No WebSocket target available');
     return jsonResponse({
       error: 'No WebSocket backend available',
     }, 503);
   }
-
-  console.log('[ws-lb] Selected WS target', { host: wsTarget.host, hostname: wsTarget.hostname });
 
   const proxyUrl = new URL(originalUrl);
   proxyUrl.pathname = '/__ws_proxy';
@@ -982,7 +978,10 @@ export async function onWebSocketProxyRequest(context) {
   );
   proxyUrl.protocol = 'https:';
 
-  console.log('[ws-lb] Rewriting to', proxyUrl.toString());
+  if (shouldExposeDebugInfo(request)) {
+    proxyUrl.searchParams.set('_debug', '1');
+  }
+
   return rewrite(proxyUrl.toString());
 }
 export async function onProxyRequest(context) {

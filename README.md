@@ -306,7 +306,6 @@ export default {
       try {
         const response = await fetch(`https://${domain}/_trigger_health_check`);
         const data = await response.json();
-        console.log(`Health check for ${domain}:`, data);
         
         // 可以在这里添加告警逻辑
         for (const [host, status] of Object.entries(data)) {

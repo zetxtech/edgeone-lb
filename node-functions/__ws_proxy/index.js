@@ -1,16 +1,89 @@
 /**
  * Node Functions WebSocket proxy handler.
  *
- * Middleware rewrites WebSocket upgrade requests to /__ws_proxy.
- * This handler terminates the client WebSocket and opens a new upstream WebSocket,
- * then proxies frames in both directions.
+ * The platform routes WebSocket upgrades directly to this Node Function
+ * (middleware rewrite does NOT preserve the Upgrade header).
  *
- * Query params (passed by middleware, no KV needed):
- * - target: upstream host (e.g., "backend.example.com" or "backend.example.com:8080")
- * - path: original pathname
- * - search: original search string (including leading '?', optional)
- * - proto: original protocol hint (https/http/wss/ws)
+ * The Node Function looks up the upstream target from KV (lb_kv) based
+ * on the request hostname, then opens an upstream WebSocket and proxies
+ * frames bidirectionally.
+ *
+ * Query params (optional, used for path/proxy hints):
+ * - path:  original pathname to forward to the upstream (default: "/")
+ * - search: original search string (including leading '?')
+ * - _debug: "1" to enable debug-log persistence to KV
  */
+
+const DEBUG_HEADER = 'EdgeoneLBDebugger';
+const DEBUG_LOG_KEY_PREFIX = 'ws-debug:';
+const DEBUG_LOG_RETENTION_SECONDS = 60 * 60 * 24 * 7;
+const PROXY_VERSION = 'ws-proxy-v5';
+
+// ── Debug-log helpers ──────────────────────────────────────────────────────
+
+function shouldExposeDebugInfo(request) {
+  const ua = request.headers.get('user-agent') || '';
+  return request.headers.has(DEBUG_HEADER) || ua.includes(DEBUG_HEADER);
+}
+
+function createDebugLogId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function serializeLogValue(value, depth = 0) {
+  if (value == null) return value;
+  if (depth >= 5) return '[MaxDepth]';
+  if (value instanceof Error) {
+    return { name: value.name, message: value.message, stack: value.stack, cause: value.cause ? serializeLogValue(value.cause, depth + 1) : null };
+  }
+  if (value instanceof URL) return value.toString();
+  if (Array.isArray(value)) return value.map((i) => serializeLogValue(i, depth + 1));
+  if (typeof value === 'object') {
+    const r = {};
+    for (const [k, v] of Object.entries(value)) r[k] = serializeLogValue(v, depth + 1);
+    return r;
+  }
+  if (typeof value === 'function') return `[Function ${value.name || 'anonymous'}]`;
+  return value;
+}
+
+function serializeHeadersForLog(headers) {
+  const result = {};
+  if (!headers) return result;
+  const redacted = new Set(['authorization', 'proxy-authorization', 'cookie', 'set-cookie']);
+  for (const [key, value] of headers.entries()) {
+    result[key] = redacted.has(key.toLowerCase()) ? '[Redacted]' : String(value).slice(0, 512);
+  }
+  return result;
+}
+
+function pushLog(logs, phase, message, detail) {
+  const entry = { time: new Date().toISOString(), phase, message };
+  if (detail !== undefined) entry.detail = serializeLogValue(detail);
+  logs.push(entry);
+}
+
+async function persistDebugLog(record) {
+  try {
+    if (typeof lb_kv === 'undefined') return;
+    const key = `${DEBUG_LOG_KEY_PREFIX}${record.id}`;
+    await lb_kv.put(key, JSON.stringify(record), { expirationTtl: DEBUG_LOG_RETENTION_SECONDS });
+  } catch {}
+}
+
+function stringifyError(err) {
+  try {
+    if (!err) return null;
+    return { name: err.name, message: err.message, stack: err.stack };
+  } catch {
+    return { message: String(err) };
+  }
+}
+
+// ── WebSocket constructor resolution ───────────────────────────────────────
 
 async function resolveWebSocketCtor() {
   // Prefer 'ws' library — it supports custom headers (Origin, etc.)
@@ -25,18 +98,7 @@ async function resolveWebSocketCtor() {
   return null;
 }
 
-function stringifyError(err) {
-  try {
-    if (!err) return null;
-    return {
-      name: err.name,
-      message: err.message,
-      stack: err.stack,
-    };
-  } catch {
-    return { message: String(err) };
-  }
-}
+// ── URL / header helpers ───────────────────────────────────────────────────
 
 function buildUpstreamWsUrl(targetHost, originalUrl, originalPath, originalSearch, originalProto) {
   const base = new URL(originalUrl);
@@ -46,13 +108,9 @@ function buildUpstreamWsUrl(targetHost, originalUrl, originalPath, originalSearc
   else base.port = '';
 
   const proto = String(originalProto || '').toLowerCase();
-  if (proto === 'https' || proto === 'wss') {
-    base.protocol = 'wss:';
-  } else if (proto === 'http' || proto === 'ws') {
-    base.protocol = 'ws:';
-  } else {
-    base.protocol = base.protocol === 'https:' ? 'wss:' : 'ws:';
-  }
+  if (proto === 'https' || proto === 'wss') base.protocol = 'wss:';
+  else if (proto === 'http' || proto === 'ws') base.protocol = 'ws:';
+  else base.protocol = base.protocol === 'https:' ? 'wss:' : 'ws:';
 
   base.pathname = originalPath || '/';
   if (originalSearch) {
@@ -60,144 +118,160 @@ function buildUpstreamWsUrl(targetHost, originalUrl, originalPath, originalSearc
   } else {
     base.search = '';
   }
-
   return base.toString();
 }
 
 function sanitizeUpstreamWebSocketHeaders(headers) {
   const sanitized = new Headers(headers || undefined);
-  const hopByHopHeaders = [
-    'connection',
-    'keep-alive',
-    'proxy-authenticate',
-    'proxy-authorization',
-    'te',
-    'trailer',
-    'transfer-encoding',
-    'upgrade',
+  const drop = [
+    'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization',
+    'te', 'trailer', 'transfer-encoding', 'upgrade',
+    'cdn-loop', 'eo-pages-dataset', 'eo-pages-language', 'x-nws-log-uuid',
+    'cf-connecting-ip', 'cf-ipcountry', 'cf-ray',
+    'content-length', 'host', 'origin',
+    'sec-websocket-extensions', 'sec-websocket-key', 'sec-websocket-protocol', 'sec-websocket-version',
   ];
-  const platformHeaders = [
-    'cdn-loop',
-    'eo-pages-dataset',
-    'eo-pages-language',
-    'x-nws-log-uuid',
-    'cf-connecting-ip',
-    'cf-ipcountry',
-    'cf-ray',
-  ];
-  const wsManagedHeaders = [
-    'content-length',
-    'host',
-    'origin',
-    'sec-websocket-extensions',
-    'sec-websocket-key',
-    'sec-websocket-protocol',
-    'sec-websocket-version',
-  ];
-
-  for (const header of hopByHopHeaders) {
-    sanitized.delete(header);
-  }
-
-  for (const header of platformHeaders) {
-    sanitized.delete(header);
-  }
-
-  for (const header of wsManagedHeaders) {
-    sanitized.delete(header);
-  }
-
+  for (const h of drop) sanitized.delete(h);
   return sanitized;
 }
 
-const PROXY_VERSION = 'ws-proxy-v3';
+// ── KV / candidate helpers ─────────────────────────────────────────────────
 
-function log(...args) {
-  try { console.log('[ws-proxy]', new Date().toISOString(), ...args); } catch {}
+const METRICS_CACHE_NAME = 'cache-host-metrics';
+const UNKNOWN_LATENCY = 999;
+
+async function readHealthMetrics(cache, host) {
+  try {
+    const key = new Request(`https://${host}/_metric`);
+    const resp = await cache.match(key);
+    if (resp) return await resp.json();
+  } catch {}
+  return { status: 'unknown', latency: UNKNOWN_LATENCY, lastChecked: 0 };
 }
+
+async function getSortedCandidates(targets, cache) {
+  const results = await Promise.all(targets.map(async (target) => {
+    const data = await readHealthMetrics(cache, target.host);
+    return { target, ...data };
+  }));
+  return results.sort((a, b) => {
+    const score = (s) => (s === 'healthy' ? 0 : s === 'unknown' ? 1 : 2);
+    if (score(a.status) !== score(b.status)) return score(a.status) - score(b.status);
+    return a.latency - b.latency;
+  });
+}
+
+async function resolveTargetFromKV(hostname, addLog) {
+  if (typeof lb_kv === 'undefined') {
+    if (addLog) addLog('kv_missing');
+    return null;
+  }
+  const rules = await lb_kv.get('rules', { type: 'json' }) || {};
+  const rule = rules[hostname];
+  if (!rule) {
+    if (addLog) addLog('rule_missing', { hostname, available: Object.keys(rules) });
+    return null;
+  }
+  const targets = Array.isArray(rule.targets) ? rule.targets : [];
+  if (targets.length === 0) {
+    if (addLog) addLog('no_targets', { hostname });
+    return null;
+  }
+  try {
+    const cache = await caches.open(METRICS_CACHE_NAME);
+    const candidates = await getSortedCandidates(targets, cache);
+    return candidates[0]?.target || targets[0];
+  } catch {
+    return targets[0];
+  }
+}
+
+// ── Entry point ────────────────────────────────────────────────────────────
 
 async function onRequest(context) {
   const { request } = context;
   try {
     const url = new URL(request.url);
-
     const upgradeHeader = request.headers.get('upgrade');
-    log('onRequest called', { url: request.url, upgrade: upgradeHeader, method: request.method });
-
     const diag = url.searchParams.get('diag') === '1';
 
     if (upgradeHeader?.toLowerCase() !== 'websocket') {
-      log('No websocket upgrade header, upgrade=', upgradeHeader);
       if (diag) {
         const wsCtor = await resolveWebSocketCtor();
-        const wsInfo = {
-          available: !!wsCtor,
-          name: wsCtor?.name || null,
-          isWsLibrary: typeof wsCtor?.prototype?.on === 'function',
-        };
-
         return new Response(JSON.stringify({
-          ok: true,
-          version: PROXY_VERSION,
-          note: 'This endpoint expects an HTTP GET with Upgrade: websocket. Target is passed via query params by middleware.',
-          url: request.url,
-          upgrade: upgradeHeader || null,
-          ws: wsInfo,
-          params: {
-            target: url.searchParams.get('target') || null,
-            path: url.searchParams.get('path') || null,
-            search: url.searchParams.get('search') || null,
-            proto: url.searchParams.get('proto') || null,
-          },
-        }, null, 2), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json; charset=utf-8' },
-        });
+          ok: true, version: PROXY_VERSION,
+          note: 'Connect via WebSocket. The Node Function resolves the upstream target from KV automatically.',
+          url: request.url, upgrade: upgradeHeader || null,
+          ws: { available: !!wsCtor, name: wsCtor?.name || null, isWsLibrary: typeof wsCtor?.prototype?.on === 'function' },
+          params: { target: url.searchParams.get('target'), path: url.searchParams.get('path') },
+        }, null, 2), { status: 200, headers: { 'Content-Type': 'application/json; charset=utf-8' } });
       }
-
-      return new Response('Expected Upgrade: websocket', {
-        status: 426,
-        headers: {
-          'Content-Type': 'text/plain',
-          'Upgrade': 'websocket'
-        }
-      });
+      return new Response('Expected Upgrade: websocket', { status: 426, headers: { 'Content-Type': 'text/plain', 'Upgrade': 'websocket' } });
     }
 
-    const targetHost = (url.searchParams.get('target') || '').trim();
-    const originalPath = (url.searchParams.get('path') || '').trim();
-    const originalSearch = (url.searchParams.get('search') || '').trim();
-    const originalProto = (url.searchParams.get('proto') || '').trim();
+    const hostname = url.hostname;
+    const debug = url.searchParams.get('_debug') === '1';
+    const logs = [];
+    const addLog = debug ? (msg, detail) => pushLog(logs, 'init', msg, detail) : () => {};
+
+    // ── Resolve target: explicit param or KV lookup ────────────────────
+    let targetHost = (url.searchParams.get('target') || '').trim();
+    let originalPath = (url.searchParams.get('path') || '').trim();
+    let originalSearch = (url.searchParams.get('search') || '').trim();
+    let originalProto = (url.searchParams.get('proto') || '').trim();
 
     if (!targetHost) {
-      return new Response(JSON.stringify({
-        error: 'Missing target parameter',
-        version: PROXY_VERSION,
-      }), {
-        status: 400,
-        headers: { 'Content-Type': 'application/json; charset=utf-8' },
-      });
+      addLog('kv_lookup_start', { hostname });
+      const target = await resolveTargetFromKV(hostname, addLog);
+      if (!target) {
+        addLog('kv_lookup_failed');
+        return new Response(JSON.stringify({ error: 'No backend available for ' + hostname, version: PROXY_VERSION }), {
+          status: 503, headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        });
+      }
+      targetHost = target.host;
+      addLog('kv_lookup_done', { targetHost });
     }
 
-    log('Building upstream URL', { targetHost, originalPath, originalSearch, originalProto });
+    if (!originalPath) {
+      originalPath = url.pathname === '/__ws_proxy' ? '/' : (url.pathname.replace(/^\/__ws_proxy/, '') || '/');
+    }
+
+    if (!originalProto) {
+      originalProto = request.headers.get('x-forwarded-proto')
+        || request.headers.get('X-Forwarded-Proto')
+        || 'https';
+    }
+
+    addLog('building_upstream', { targetHost, originalPath, originalSearch, originalProto });
 
     const upstreamUrl = buildUpstreamWsUrl(targetHost, request.url, originalPath, originalSearch, originalProto);
-    log('Upstream URL built', upstreamUrl);
+    addLog('upstream_built', { upstreamUrl });
 
-    return { websocket: createProxyHandler(upstreamUrl, targetHost) };
+    if (debug && logs.length > 0) {
+      // Persist init-phase logs immediately so we can see them even if onopen fails
+      const initRecord = {
+        id: createDebugLogId(),
+        kind: 'websocket-init',
+        createdAt: new Date().toISOString(),
+        request: { url: request.url, headers: serializeHeadersForLog(request.headers) },
+        proxy: { upstreamUrl, targetHost },
+        logs: serializeLogValue(logs),
+      };
+      persistDebugLog(initRecord);
+    }
+
+    return { websocket: createProxyHandler(upstreamUrl, targetHost, request, debug) };
   } catch (err) {
-    return new Response(JSON.stringify({
-      error: 'Internal Error',
-      version: PROXY_VERSION,
-      detail: stringifyError(err),
-    }, null, 2), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json; charset=utf-8' },
+    return new Response(JSON.stringify({ error: 'Internal Error', version: PROXY_VERSION, detail: stringifyError(err) }, null, 2), {
+      status: 500, headers: { 'Content-Type': 'application/json; charset=utf-8' },
     });
   }
 }
 
-function createProxyHandler(upstreamUrl, targetHost) {
+// ── Proxy handler factory ──────────────────────────────────────────────────
+
+function createProxyHandler(upstreamUrl, targetHost, originalRequest, debug) {
   let upstream = null;
   let client = null;
   let clientClosed = false;
@@ -208,10 +282,48 @@ function createProxyHandler(upstreamUrl, targetHost) {
   let OPEN_STATE = 1;
   let isWsLibrary = false;
 
+  // ── Debug-log state ──────────────────────────────────────────────────
+  const logs = [];
+  let phase = 'init';
+  let msgSeq = 0;
+  const startedAt = Date.now();
+
+  const setPhase = (next, message, detail) => {
+    phase = next;
+    if (debug) pushLog(logs, phase, message, detail);
+  };
+
+  const addLog = debug
+    ? (message, detail) => { pushLog(logs, phase, message, detail); }
+    : () => {};
+
+  const finalizeDebugLog = (outcome, closeInfo) => {
+    if (!debug) return;
+    const record = {
+      id: createDebugLogId(),
+      kind: 'websocket',
+      createdAt: new Date(startedAt).toISOString(),
+      completedAt: new Date().toISOString(),
+      durationMs: Date.now() - startedAt,
+      phase,
+      outcome,
+      request: {
+        url: originalRequest.url,
+        method: originalRequest.method,
+        headers: serializeHeadersForLog(originalRequest.headers),
+      },
+      proxy: { upstreamUrl, targetHost },
+      close: closeInfo || null,
+      messages: msgSeq,
+      logs: serializeLogValue(logs),
+    };
+    persistDebugLog(record);
+  };
+
+  // ── Helpers ──────────────────────────────────────────────────────────
+
   const safeClose = (ws, code, reason) => {
-    try {
-      ws?.close?.(code, reason);
-    } catch {}
+    try { ws?.close?.(code, reason); } catch {}
   };
 
   const sanitizeCloseCode = (code) => {
@@ -222,147 +334,147 @@ function createProxyHandler(upstreamUrl, targetHost) {
   };
 
   const safeSend = (ws, data) => {
-    try {
-      ws?.send?.(data);
-      return true;
-    } catch {
-      return false;
-    }
+    try { ws?.send?.(data); return true; } catch { return false; }
   };
 
-  const cleanup = () => {
+  const cleanup = (outcome, closeInfo) => {
     if (clientClosed) return;
     clientClosed = true;
-    log('cleanup called');
     pending.length = 0;
-    try {
-      upstream?.terminate?.();
-    } catch {}
-    try {
-      upstream?.close?.();
-    } catch {}
+    try { upstream?.terminate?.(); } catch {}
+    try { upstream?.close?.(); } catch {}
     upstream = null;
+    finalizeDebugLog(outcome || 'closed', closeInfo);
   };
+
+  // ── Handler object ───────────────────────────────────────────────────
 
   return {
     async onopen(ws, request) {
       try {
-      log('onopen called, upstreamUrl=', upstreamUrl);
-      client = ws;
+        client = ws;
+        setPhase('onopen', 'client_ws_opened', { url: originalRequest.url });
 
-      try {
-        upstreamCtor = await resolveWebSocketCtor();
-      } catch (ctorErr) {
-        log('resolveWebSocketCtor threw', stringifyError(ctorErr));
-        safeClose(ws, 1011, 'WS ctor error');
-        cleanup();
-        return;
-      }
-      OPEN_STATE = typeof upstreamCtor?.OPEN === 'number' ? upstreamCtor.OPEN : 1;
-      isWsLibrary = typeof upstreamCtor?.prototype?.on === 'function';
-      log('WS ctor resolved', { available: !!upstreamCtor, isWsLibrary, OPEN_STATE });
+        // Resolve WebSocket constructor
+        try {
+          upstreamCtor = await resolveWebSocketCtor();
+        } catch (ctorErr) {
+          addLog('ws_ctor_error', stringifyError(ctorErr));
+          safeClose(ws, 1011, 'WS ctor error');
+          cleanup('error', { code: 1011, reason: 'WS ctor error' });
+          return;
+        }
+        OPEN_STATE = typeof upstreamCtor?.OPEN === 'number' ? upstreamCtor.OPEN : 1;
+        isWsLibrary = typeof upstreamCtor?.prototype?.on === 'function';
+        addLog('ws_ctor_resolved', { available: !!upstreamCtor, isWsLibrary, ctorName: upstreamCtor?.name || null });
 
-      if (!upstreamCtor) {
-        log('No upstream WebSocket constructor available');
-        safeClose(ws, 1011, 'Upstream WebSocket unavailable');
-        cleanup();
-        return;
-      }
+        if (!upstreamCtor) {
+          addLog('ws_ctor_unavailable');
+          safeClose(ws, 1011, 'Upstream WebSocket unavailable');
+          cleanup('error', { code: 1011, reason: 'WS ctor unavailable' });
+          return;
+        }
 
-      const clientProtocol = request?.headers?.get?.('sec-websocket-protocol') || request?.headers?.get?.('Sec-WebSocket-Protocol') || undefined;
-      const clientOrigin = request?.headers?.get?.('origin') || request?.headers?.get?.('Origin') || undefined;
-      const forwardedHeaders = sanitizeUpstreamWebSocketHeaders(request?.headers);
-      const forwardedHeaderObject = Object.fromEntries(forwardedHeaders.entries());
+        // Extract client headers
+        const clientProtocol = request?.headers?.get?.('sec-websocket-protocol') || undefined;
+        const clientOrigin = request?.headers?.get?.('origin') || request?.headers?.get?.('Origin') || undefined;
+        const forwardedHeaders = sanitizeUpstreamWebSocketHeaders(request?.headers);
+        const forwardedHeaderObject = Object.fromEntries(forwardedHeaders.entries());
 
-      try {
-        log('Creating upstream WS', { upstreamUrl, isWsLibrary, clientProtocol: clientProtocol || null, origin: clientOrigin || null });
+        addLog('client_headers', {
+          origin: clientOrigin || null,
+          protocol: clientProtocol || null,
+          forwardedKeys: Object.keys(forwardedHeaderObject),
+        });
+
+        // Create upstream WebSocket
+        try {
+          setPhase('upstream_connect', 'upstream_creating', { upstreamUrl, isWsLibrary });
+          if (isWsLibrary) {
+            const options = { handshakeTimeout: 10000, perMessageDeflate: false };
+            if (clientOrigin) {
+              options.origin = clientOrigin;
+              forwardedHeaderObject['Origin'] = clientOrigin;
+            }
+            if (Object.keys(forwardedHeaderObject).length > 0) {
+              options.headers = forwardedHeaderObject;
+            }
+            addLog('upstream_ws_options', { origin: options.origin || null, headerKeys: Object.keys(options.headers || {}) });
+            upstream = clientProtocol
+              ? new upstreamCtor(upstreamUrl, clientProtocol, options)
+              : new upstreamCtor(upstreamUrl, options);
+          } else {
+            upstream = clientProtocol
+              ? new upstreamCtor(upstreamUrl, clientProtocol)
+              : new upstreamCtor(upstreamUrl);
+          }
+          addLog('upstream_ws_created', { readyState: upstream?.readyState });
+        } catch (connErr) {
+          addLog('upstream_ws_create_failed', stringifyError(connErr));
+          safeClose(ws, 1011, 'Upstream connect failed');
+          cleanup('error', { code: 1011, reason: 'Upstream create failed', error: stringifyError(connErr) });
+          return;
+        }
+
+        // Wire upstream events
+        const flushPending = () => {
+          while (pending.length > 0) {
+            const item = pending.shift();
+            try { upstream.send(item.data); } catch { break; }
+          }
+        };
+
+        const onUpstreamMessage = (data) => {
+          if (!safeSend(client, data)) {
+            try { upstream.close(); } catch {}
+          }
+        };
+
+        const onUpstreamClose = (code, reason) => {
+          const safeCode = sanitizeCloseCode(code || 1000);
+          const reasonStr = reason?.toString?.() || '';
+          addLog('upstream_ws_closed', { code, safeCode, reason: reasonStr });
+          safeClose(client, safeCode, reasonStr);
+          cleanup('upstream_closed', { code: safeCode, reason: reasonStr, source: 'upstream' });
+        };
+
+        const onUpstreamError = (err) => {
+          addLog('upstream_ws_error', stringifyError(err));
+          safeClose(client, 1011, 'Upstream error');
+          cleanup('error', { code: 1011, reason: 'Upstream error', error: stringifyError(err) });
+        };
+
         if (isWsLibrary) {
-          const options = {
-            handshakeTimeout: 10000,
-            perMessageDeflate: false,
-          };
-
-          if (clientOrigin) {
-            options.origin = clientOrigin;
-            // Also set in headers for maximum compatibility
-            forwardedHeaderObject['Origin'] = clientOrigin;
-          }
-
-          if (Object.keys(forwardedHeaderObject).length > 0) {
-            options.headers = forwardedHeaderObject;
-          }
-
-          log('ws lib options', { origin: options.origin || null, headerKeys: Object.keys(options.headers || {}) });
-          upstream = clientProtocol
-            ? new upstreamCtor(upstreamUrl, clientProtocol, options)
-            : new upstreamCtor(upstreamUrl, options);
+          upstream.on('open', () => {
+            setPhase('proxying', 'upstream_ws_open');
+            flushPending();
+          });
+          upstream.on('message', onUpstreamMessage);
+          upstream.on('close', onUpstreamClose);
+          upstream.on('error', onUpstreamError);
         } else {
-          upstream = clientProtocol
-            ? new upstreamCtor(upstreamUrl, clientProtocol)
-            : new upstreamCtor(upstreamUrl);
+          upstream.addEventListener('open', () => {
+            setPhase('proxying', 'upstream_ws_open');
+            flushPending();
+          });
+          upstream.addEventListener('message', (ev) => { onUpstreamMessage(ev?.data); });
+          upstream.addEventListener('close', (ev) => { onUpstreamClose(ev?.code, ev?.reason); });
+          upstream.addEventListener('error', (ev) => { onUpstreamError(ev?.error || ev); });
         }
-        log('Upstream WS created, readyState=', upstream?.readyState);
-      } catch (connErr) {
-        log('Upstream WS creation failed', stringifyError(connErr));
-        safeClose(ws, 1011, 'Upstream connect failed');
-        cleanup();
-        return;
-      }
-
-      const flushPending = () => {
-        while (pending.length > 0) {
-          const item = pending.shift();
-          try {
-            upstream.send(item.data);
-          } catch {
-            break;
-          }
-        }
-      };
-
-      const onUpstreamMessage = (data) => {
-        if (!safeSend(client, data)) {
-          try { upstream.close(); } catch {}
-        }
-      };
-
-      const onUpstreamClose = (code, reason) => {
-        log('Upstream WS closed', { code, reason: reason?.toString?.() });
-        const safeCode = sanitizeCloseCode(code || 1000);
-        const reasonStr = reason?.toString?.() || '';
-        safeClose(client, safeCode, reasonStr);
-        cleanup();
-      };
-
-      const onUpstreamError = (err) => {
-        log('Upstream WS error', stringifyError(err));
-        safeClose(client, 1011, 'Upstream error');
-        cleanup();
-      };
-
-      if (isWsLibrary) {
-        log('Registering ws lib event handlers');
-        upstream.on('open', () => { log('Upstream WS open event'); flushPending(); });
-        upstream.on('message', onUpstreamMessage);
-        upstream.on('close', onUpstreamClose);
-        upstream.on('error', onUpstreamError);
-      } else {
-        log('Registering native WS event handlers');
-        upstream.addEventListener('open', () => { log('Upstream WS open event'); flushPending(); });
-        upstream.addEventListener('message', (ev) => { onUpstreamMessage(ev?.data); });
-        upstream.addEventListener('close', (ev) => { onUpstreamClose(ev?.code, ev?.reason); });
-        upstream.addEventListener('error', (ev) => { onUpstreamError(ev?.error || ev); });
-      }
-      log('Upstream WS handlers registered, waiting for open...');
+        addLog('upstream_handlers_registered');
       } catch (onopenErr) {
-        log('onopen unhandled error', stringifyError(onopenErr));
+        addLog('onopen_unhandled_error', stringifyError(onopenErr));
         safeClose(ws, 1011, 'Proxy internal error');
-        cleanup();
+        cleanup('error', { code: 1011, reason: 'onopen unhandled', error: stringifyError(onopenErr) });
       }
     },
 
     async onmessage(ws, message, isBinary) {
-      log('Client message', { len: message?.length ?? message?.byteLength, isBinary });
+      msgSeq++;
+      const len = message?.length ?? message?.byteLength ?? 0;
+      if (msgSeq <= 5 || msgSeq % 100 === 0) {
+        addLog('client_msg', { seq: msgSeq, len, isBinary });
+      }
       let payload = message;
       if (!isBinary && typeof payload !== 'string') {
         payload = payload?.toString?.() ?? String(payload);
@@ -370,35 +482,30 @@ function createProxyHandler(upstreamUrl, targetHost) {
 
       if (!upstream || upstream.readyState !== OPEN_STATE) {
         if (pending.length >= MAX_PENDING) {
+          addLog('pending_overflow', { pending: pending.length });
           safeClose(ws, 1013, 'Upstream not ready');
-          cleanup();
+          cleanup('error', { code: 1013, reason: 'Pending overflow' });
           return;
         }
         pending.push({ data: payload, isBinary });
         return;
       }
 
-      try {
-        upstream.send(payload);
-      } catch {}
+      try { upstream.send(payload); } catch {}
     },
 
     async onclose(ws, code, reason) {
-      log('Client WS closed', { code, reason: reason?.toString?.() });
       const reasonStr = reason?.toString?.() || '';
-      try {
-        upstream?.close?.(sanitizeCloseCode(code), reasonStr);
-      } catch {}
-      cleanup();
+      addLog('client_ws_closed', { code, reason: reasonStr });
+      try { upstream?.close?.(sanitizeCloseCode(code), reasonStr); } catch {}
+      cleanup('client_closed', { code: sanitizeCloseCode(code), reason: reasonStr, source: 'client' });
     },
 
     async onerror(err) {
-      log('Client WS error', stringifyError(err));
-      try {
-        upstream?.close?.(1011, 'Client error');
-      } catch {}
-      cleanup();
-    }
+      addLog('client_ws_error', stringifyError(err));
+      try { upstream?.close?.(1011, 'Client error'); } catch {}
+      cleanup('error', { code: 1011, reason: 'Client error', error: stringifyError(err) });
+    },
   };
 }
 
