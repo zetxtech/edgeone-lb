@@ -195,18 +195,33 @@ async function onRequest(context) {
     const upgradeHeader = request.headers.get('upgrade');
     const diag = url.searchParams.get('diag') === '1';
 
+    // Diagnostic mode: always return HTTP (even for WebSocket) so the
+    // browser can display the result.  Access with ?diag=1.
+    if (diag) {
+      const wsCtor = await resolveWebSocketCtor();
+      return new Response(JSON.stringify({
+        ok: true, version: PROXY_VERSION,
+        upgrade: upgradeHeader || null,
+        ws: {
+          available: !!wsCtor,
+          name: wsCtor?.name || null,
+          isWsLibrary: typeof wsCtor?.prototype?.on === 'function',
+          ctorType: wsCtor ? (typeof wsCtor) : null,
+        },
+        globalWs: typeof globalThis.WebSocket,
+        lb_kv: typeof lb_kv,
+        params: {
+          target: url.searchParams.get('target'),
+          path: url.searchParams.get('path'),
+          proto: url.searchParams.get('proto'),
+        },
+      }, null, 2), { status: 200, headers: { 'Content-Type': 'application/json; charset=utf-8' } });
+    }
+
     if (upgradeHeader?.toLowerCase() !== 'websocket') {
-      if (diag) {
-        const wsCtor = await resolveWebSocketCtor();
-        return new Response(JSON.stringify({
-          ok: true, version: PROXY_VERSION,
-          note: 'Connect via WebSocket. The Node Function resolves the upstream target from KV automatically.',
-          url: request.url, upgrade: upgradeHeader || null,
-          ws: { available: !!wsCtor, name: wsCtor?.name || null, isWsLibrary: typeof wsCtor?.prototype?.on === 'function' },
-          params: { target: url.searchParams.get('target'), path: url.searchParams.get('path') },
-        }, null, 2), { status: 200, headers: { 'Content-Type': 'application/json; charset=utf-8' } });
-      }
-      return new Response('Expected Upgrade: websocket', { status: 426, headers: { 'Content-Type': 'text/plain', 'Upgrade': 'websocket' } });
+      return new Response('Expected Upgrade: websocket. Add ?diag=1 for diagnostics.', {
+        status: 426, headers: { 'Content-Type': 'text/plain', 'Upgrade': 'websocket' },
+      });
     }
 
     const hostname = url.hostname;
