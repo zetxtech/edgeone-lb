@@ -369,6 +369,20 @@ function createProxyHandler(upstreamUrl, targetHost, originalRequest, debug) {
       try {
         client = ws;
         setPhase('onopen', 'client_ws_opened', { url: originalRequest.url });
+        console.log('[ws-proxy] onopen entered, upstreamUrl=', upstreamUrl);
+
+        // Diagnostic: write directly to KV to prove onopen ran
+        try {
+          if (typeof lb_kv !== 'undefined') {
+            await lb_kv.put('ws-diag:onopen-ran', JSON.stringify({
+              time: new Date().toISOString(),
+              upstreamUrl,
+              targetHost,
+            }), { expirationTtl: 300 });
+          }
+        } catch (kvErr) {
+          console.log('[ws-proxy] onopen kv write failed:', kvErr?.message || kvErr);
+        }
 
         // Resolve WebSocket constructor
         try {
@@ -383,8 +397,11 @@ function createProxyHandler(upstreamUrl, targetHost, originalRequest, debug) {
         isWsLibrary = typeof upstreamCtor?.prototype?.on === 'function';
         addLog('ws_ctor_resolved', { available: !!upstreamCtor, isWsLibrary, ctorName: upstreamCtor?.name || null });
 
+        console.log('[ws-proxy] ws_ctor resolved:', !!upstreamCtor, 'isWsLibrary:', isWsLibrary);
+
         if (!upstreamCtor) {
           addLog('ws_ctor_unavailable');
+          console.log('[ws-proxy] ABORT: ws_ctor unavailable');
           safeClose(ws, 1011, 'Upstream WebSocket unavailable');
           cleanup('error', { code: 1011, reason: 'WS ctor unavailable' });
           return;
@@ -395,6 +412,7 @@ function createProxyHandler(upstreamUrl, targetHost, originalRequest, debug) {
         const clientOrigin = request?.headers?.get?.('origin') || request?.headers?.get?.('Origin') || undefined;
         const forwardedHeaders = sanitizeUpstreamWebSocketHeaders(request?.headers);
         const forwardedHeaderObject = Object.fromEntries(forwardedHeaders.entries());
+        console.log('[ws-proxy] client origin:', clientOrigin, 'protocol:', clientProtocol);
 
         addLog('client_headers', {
           origin: clientOrigin || null,
@@ -415,6 +433,7 @@ function createProxyHandler(upstreamUrl, targetHost, originalRequest, debug) {
               options.headers = forwardedHeaderObject;
             }
             addLog('upstream_ws_options', { origin: options.origin || null, headerKeys: Object.keys(options.headers || {}) });
+            console.log('[ws-proxy] creating upstream ws:', upstreamUrl, 'origin:', options.origin);
             upstream = clientProtocol
               ? new upstreamCtor(upstreamUrl, clientProtocol, options)
               : new upstreamCtor(upstreamUrl, options);
@@ -423,8 +442,10 @@ function createProxyHandler(upstreamUrl, targetHost, originalRequest, debug) {
               ? new upstreamCtor(upstreamUrl, clientProtocol)
               : new upstreamCtor(upstreamUrl);
           }
+          console.log('[ws-proxy] upstream ws created, readyState:', upstream?.readyState);
           addLog('upstream_ws_created', { readyState: upstream?.readyState });
         } catch (connErr) {
+          console.log('[ws-proxy] upstream ws create FAILED:', connErr?.message || connErr);
           addLog('upstream_ws_create_failed', stringifyError(connErr));
           safeClose(ws, 1011, 'Upstream connect failed');
           cleanup('error', { code: 1011, reason: 'Upstream create failed', error: stringifyError(connErr) });
@@ -461,23 +482,39 @@ function createProxyHandler(upstreamUrl, targetHost, originalRequest, debug) {
 
         if (isWsLibrary) {
           upstream.on('open', () => {
+            console.log('[ws-proxy] upstream WS open!');
             setPhase('proxying', 'upstream_ws_open');
             flushPending();
           });
           upstream.on('message', onUpstreamMessage);
-          upstream.on('close', onUpstreamClose);
-          upstream.on('error', onUpstreamError);
+          upstream.on('close', (code, reason) => {
+            console.log('[ws-proxy] upstream WS close:', code, reason?.toString?.());
+            onUpstreamClose(code, reason);
+          });
+          upstream.on('error', (err) => {
+            console.log('[ws-proxy] upstream WS error:', err?.message || err);
+            onUpstreamError(err);
+          });
         } else {
           upstream.addEventListener('open', () => {
+            console.log('[ws-proxy] upstream WS open!');
             setPhase('proxying', 'upstream_ws_open');
             flushPending();
           });
           upstream.addEventListener('message', (ev) => { onUpstreamMessage(ev?.data); });
-          upstream.addEventListener('close', (ev) => { onUpstreamClose(ev?.code, ev?.reason); });
-          upstream.addEventListener('error', (ev) => { onUpstreamError(ev?.error || ev); });
+          upstream.addEventListener('close', (ev) => {
+            console.log('[ws-proxy] upstream WS close:', ev?.code, ev?.reason);
+            onUpstreamClose(ev?.code, ev?.reason);
+          });
+          upstream.addEventListener('error', (ev) => {
+            console.log('[ws-proxy] upstream WS error:', ev?.error || ev);
+            onUpstreamError(ev?.error || ev);
+          });
         }
+        console.log('[ws-proxy] upstream handlers registered');
         addLog('upstream_handlers_registered');
       } catch (onopenErr) {
+        console.log('[ws-proxy] onopen UNHANDLED ERROR:', onopenErr?.message || onopenErr, onopenErr?.stack);
         addLog('onopen_unhandled_error', stringifyError(onopenErr));
         safeClose(ws, 1011, 'Proxy internal error');
         cleanup('error', { code: 1011, reason: 'onopen unhandled', error: stringifyError(onopenErr) });
