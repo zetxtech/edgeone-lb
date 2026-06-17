@@ -1,4 +1,4 @@
-import { isAdminHostname } from './lb-proxy.js';
+import { isAdminHostname, onWebSocketProxyRequest } from './lb-proxy.js';
 
 const INTERNAL_HTTP_PROXY_PREFIX = '/__proxy';
 
@@ -9,13 +9,24 @@ function isInternalProxyPath(pathname) {
 export async function middleware(context) {
   const { request, next, rewrite } = context;
   const url = new URL(request.url);
+  const upgrade = request.headers.get('upgrade');
 
-  // WebSocket proxy endpoint — pass through to Node Function.
-  if (url.pathname === '/__ws_proxy' || url.pathname.startsWith('/__ws_proxy/')) {
-    return next();
-  }
+  // Diagnostic: prove middleware runs for this request.
+  // Check with: lb_kv.get('ws-diag:last-request')
+  context.waitUntil?.((async () => {
+    try {
+      if (typeof lb_kv !== 'undefined') {
+        await lb_kv.put('ws-diag:last-request', JSON.stringify({
+          time: new Date().toISOString(),
+          url: request.url,
+          upgrade: upgrade || null,
+          pathname: url.pathname,
+        }), { expirationTtl: 300 });
+      }
+    } catch {}
+  })());
 
-  if (isInternalProxyPath(url.pathname)) {
+  if (url.pathname === '/__ws_proxy' || isInternalProxyPath(url.pathname)) {
     return next();
   }
 
@@ -23,9 +34,24 @@ export async function middleware(context) {
     return next();
   }
 
-  // HTTP proxy — rewrite to internal edge-function path.
-  // (WebSocket upgrades bypass middleware entirely; the platform routes
-  //  them directly to the catch-all Node Function.)
+  if (upgrade?.toLowerCase() === 'websocket') {
+    // Diagnostic: write to KV so we can confirm middleware ran.
+    // Check with: lb_kv.get('ws-diag:middleware-hit')
+    context.waitUntil?.((async () => {
+      try {
+        if (typeof lb_kv !== 'undefined') {
+          await lb_kv.put('ws-diag:middleware-hit', JSON.stringify({
+            time: new Date().toISOString(),
+            url: request.url,
+            upgrade: request.headers.get('upgrade'),
+            allHeaders: Object.fromEntries(request.headers.entries()),
+          }), { expirationTtl: 300 });
+        }
+      } catch {}
+    })());
+    return onWebSocketProxyRequest(context);
+  }
+
   const proxyUrl = new URL(url);
   proxyUrl.pathname = url.pathname === '/'
     ? INTERNAL_HTTP_PROXY_PREFIX
