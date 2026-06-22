@@ -374,7 +374,7 @@ function createProxyHandler(upstreamUrl, targetHost, originalRequest, debug) {
         // Diagnostic: write directly to KV to prove onopen ran
         try {
           if (typeof lb_kv !== 'undefined') {
-            await lb_kv.put('ws-diag:onopen-ran', JSON.stringify({
+            await lb_kv.put('ws_diag_onopen_ran', JSON.stringify({
               time: new Date().toISOString(),
               upstreamUrl,
               targetHost,
@@ -407,17 +407,27 @@ function createProxyHandler(upstreamUrl, targetHost, originalRequest, debug) {
           return;
         }
 
-        // Extract client headers
-        const clientProtocol = request?.headers?.get?.('sec-websocket-protocol') || undefined;
-        const clientOrigin = request?.headers?.get?.('origin') || request?.headers?.get?.('Origin') || undefined;
-        const forwardedHeaders = sanitizeUpstreamWebSocketHeaders(request?.headers);
-        const forwardedHeaderObject = Object.fromEntries(forwardedHeaders.entries());
+// Extract client headers — prefer URL params (_h_origin, _h_protocol,
+        // _h_ua) because the platform's rewrite strips the original request
+        // headers.  Fall back to request.headers for direct access scenarios.
+        const reqUrl = new URL(originalRequest.url);
+        const clientOrigin = reqUrl.searchParams.get('_h_origin')
+          || request?.headers?.get?.('origin')
+          || request?.headers?.get?.('Origin')
+          || undefined;
+        const clientProtocol = reqUrl.searchParams.get('_h_protocol')
+          || request?.headers?.get?.('sec-websocket-protocol')
+          || undefined;
+        const clientUA = reqUrl.searchParams.get('_h_ua')
+          || request?.headers?.get?.('user-agent')
+          || undefined;
         console.log('[ws-proxy] client origin:', clientOrigin, 'protocol:', clientProtocol);
 
         addLog('client_headers', {
           origin: clientOrigin || null,
           protocol: clientProtocol || null,
-          forwardedKeys: Object.keys(forwardedHeaderObject),
+          ua: clientUA ? 'present' : null,
+          source: reqUrl.searchParams.has('_h_origin') ? 'url_params' : 'request_headers',
         });
 
         // Create upstream WebSocket
@@ -425,12 +435,16 @@ function createProxyHandler(upstreamUrl, targetHost, originalRequest, debug) {
           setPhase('upstream_connect', 'upstream_creating', { upstreamUrl, isWsLibrary });
           if (isWsLibrary) {
             const options = { handshakeTimeout: 10000, perMessageDeflate: false };
+            const headers = {};
             if (clientOrigin) {
               options.origin = clientOrigin;
-              forwardedHeaderObject['Origin'] = clientOrigin;
+              headers['Origin'] = clientOrigin;
             }
-            if (Object.keys(forwardedHeaderObject).length > 0) {
-              options.headers = forwardedHeaderObject;
+            if (clientUA) {
+              headers['User-Agent'] = clientUA;
+            }
+            if (Object.keys(headers).length > 0) {
+              options.headers = headers;
             }
             addLog('upstream_ws_options', { origin: options.origin || null, headerKeys: Object.keys(options.headers || {}) });
             console.log('[ws-proxy] creating upstream ws:', upstreamUrl, 'origin:', options.origin);

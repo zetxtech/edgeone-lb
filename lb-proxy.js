@@ -982,6 +982,16 @@ export async function onWebSocketProxyRequest(context) {
     proxyUrl.searchParams.set('_debug', '1');
   }
 
+  // Forward critical WebSocket headers via URL params, because the
+  // platform's rewrite does NOT preserve the original client headers.
+  const forwardHeader = (name, param) => {
+    const val = request.headers.get(name);
+    if (val) proxyUrl.searchParams.set(param, val);
+  };
+  forwardHeader('origin', '_h_origin');
+  forwardHeader('sec-websocket-protocol', '_h_protocol');
+  forwardHeader('user-agent', '_h_ua');
+
   return rewrite(proxyUrl.toString());
 }
 export async function onProxyRequest(context) {
