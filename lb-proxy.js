@@ -968,7 +968,7 @@ export async function onWebSocketProxyRequest(context) {
   proxyUrl.pathname = '/__ws_proxy';
   proxyUrl.search = '';
   proxyUrl.searchParams.set('target', wsTarget.host);
-  proxyUrl.searchParams.set('path', originalUrl.pathname);
+  proxyUrl.searchParams.set('path', wsTarget.wsPath || '/');
   proxyUrl.searchParams.set('search', originalUrl.search);
   proxyUrl.searchParams.set(
     'proto',

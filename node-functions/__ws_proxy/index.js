@@ -371,17 +371,13 @@ function createProxyHandler(upstreamUrl, targetHost, originalRequest, debug) {
         setPhase('onopen', 'client_ws_opened', { url: originalRequest.url });
         console.log('[ws-proxy] onopen entered, upstreamUrl=', upstreamUrl);
 
-        // Diagnostic: write directly to KV to prove onopen ran
-        try {
-          if (typeof lb_kv !== 'undefined') {
-            await lb_kv.put('ws_diag_onopen_ran', JSON.stringify({
-              time: new Date().toISOString(),
-              upstreamUrl,
-              targetHost,
-            }), { expirationTtl: 300 });
-          }
-        } catch (kvErr) {
-          console.log('[ws-proxy] onopen kv write failed:', kvErr?.message || kvErr);
+        // Diagnostic: fire-and-forget KV write (do NOT await — may hang in WS context)
+        if (typeof lb_kv !== 'undefined') {
+          lb_kv.put('ws_diag_onopen_ran', JSON.stringify({
+            time: new Date().toISOString(),
+            upstreamUrl,
+            targetHost,
+          }), { expirationTtl: 300 }).catch(() => {});
         }
 
         // Resolve WebSocket constructor
@@ -458,6 +454,13 @@ function createProxyHandler(upstreamUrl, targetHost, originalRequest, debug) {
           }
           console.log('[ws-proxy] upstream ws created, readyState:', upstream?.readyState);
           addLog('upstream_ws_created', { readyState: upstream?.readyState });
+          // Delayed readyState check
+          setTimeout(() => {
+            console.log('[ws-proxy] upstream ws after 1s, readyState:', upstream?.readyState);
+          }, 1000);
+          setTimeout(() => {
+            console.log('[ws-proxy] upstream ws after 5s, readyState:', upstream?.readyState);
+          }, 5000);
         } catch (connErr) {
           console.log('[ws-proxy] upstream ws create FAILED:', connErr?.message || connErr);
           addLog('upstream_ws_create_failed', stringifyError(connErr));
@@ -509,6 +512,36 @@ function createProxyHandler(upstreamUrl, targetHost, originalRequest, debug) {
             console.log('[ws-proxy] upstream WS error:', err?.message || err);
             onUpstreamError(err);
           });
+          upstream.on('unexpected-response', (_req, res) => {
+            console.log('[ws-proxy] upstream unexpected-response:', res?.statusCode, res?.statusMessage);
+            addLog('unexpected_response', { statusCode: res?.statusCode, statusMessage: res?.statusMessage });
+          });
+          // Diagnostic: inspect underlying socket state
+          try {
+            const sock = upstream?._req?.socket || upstream?._socket;
+            if (sock) {
+              console.log('[ws-proxy] underlying socket:', sock.remoteAddress, sock.remotePort, 'connecting:', sock.connecting, 'pending:', sock.pending);
+              sock.on('connect', () => console.log('[ws-proxy] socket CONNECT event'));
+              sock.on('error', (e) => console.log('[ws-proxy] socket ERROR:', e?.message));
+              sock.on('close', () => console.log('[ws-proxy] socket CLOSE event'));
+              sock.on('timeout', () => console.log('[ws-proxy] socket TIMEOUT event'));
+            } else {
+              console.log('[ws-proxy] no underlying socket found on ws instance');
+            }
+          } catch (sockErr) {
+            console.log('[ws-proxy] socket inspect error:', sockErr?.message);
+          }
+          // Manual timeout fallback (handshakeTimeout may not work in all envs)
+          const connectTimeout = setTimeout(() => {
+            if (upstream && upstream.readyState !== OPEN_STATE) {
+              console.log('[ws-proxy] MANUAL TIMEOUT: upstream still not open after 15s, terminating');
+              addLog('upstream_connect_timeout', { readyState: upstream?.readyState });
+              try { upstream.terminate(); } catch {}
+            }
+          }, 15000);
+          upstream.once('open', () => clearTimeout(connectTimeout));
+          upstream.once('close', () => clearTimeout(connectTimeout));
+          upstream.once('error', () => clearTimeout(connectTimeout));
         } else {
           upstream.addEventListener('open', () => {
             console.log('[ws-proxy] upstream WS open!');
