@@ -86,15 +86,16 @@ function stringifyError(err) {
 // ── WebSocket constructor resolution ───────────────────────────────────────
 
 async function resolveWebSocketCtor() {
-  // Prefer 'ws' library — it supports custom headers (Origin, etc.)
-  // which are critical for upstream servers that validate Origin.
+  // Use platform-native WebSocket first — it uses the platform's built-in
+  // networking stack which is more reliable in serverless edge environments.
+  // The 'ws' npm library relies on Node.js TCP sockets which may be restricted.
+  if (typeof globalThis.WebSocket === 'function') return globalThis.WebSocket;
+  // Fallback to 'ws' library
   try {
     const mod = await import('ws');
     const ctor = mod?.default || mod?.WebSocket || mod;
     if (ctor) return ctor;
   } catch {}
-  // Fallback to global WebSocket (may not support custom headers)
-  if (typeof globalThis.WebSocket === 'function') return globalThis.WebSocket;
   return null;
 }
 
@@ -430,6 +431,7 @@ function createProxyHandler(upstreamUrl, targetHost, originalRequest, debug) {
         try {
           setPhase('upstream_connect', 'upstream_creating', { upstreamUrl, isWsLibrary });
           if (isWsLibrary) {
+            // ws npm library — supports custom headers
             const options = { handshakeTimeout: 10000, perMessageDeflate: false };
             const headers = {};
             if (clientOrigin) {
@@ -443,24 +445,20 @@ function createProxyHandler(upstreamUrl, targetHost, originalRequest, debug) {
               options.headers = headers;
             }
             addLog('upstream_ws_options', { origin: options.origin || null, headerKeys: Object.keys(options.headers || {}) });
-            console.log('[ws-proxy] creating upstream ws:', upstreamUrl, 'origin:', options.origin);
+            console.log('[ws-proxy] creating upstream ws (ws lib):', upstreamUrl, 'origin:', options.origin);
             upstream = clientProtocol
               ? new upstreamCtor(upstreamUrl, clientProtocol, options)
               : new upstreamCtor(upstreamUrl, options);
           } else {
+            // Native WebSocket — no custom headers support, but uses
+            // platform networking stack (more reliable in edge environments)
+            console.log('[ws-proxy] creating upstream ws (native):', upstreamUrl, 'protocol:', clientProtocol);
             upstream = clientProtocol
               ? new upstreamCtor(upstreamUrl, clientProtocol)
               : new upstreamCtor(upstreamUrl);
           }
           console.log('[ws-proxy] upstream ws created, readyState:', upstream?.readyState);
           addLog('upstream_ws_created', { readyState: upstream?.readyState });
-          // Delayed readyState check
-          setTimeout(() => {
-            console.log('[ws-proxy] upstream ws after 1s, readyState:', upstream?.readyState);
-          }, 1000);
-          setTimeout(() => {
-            console.log('[ws-proxy] upstream ws after 5s, readyState:', upstream?.readyState);
-          }, 5000);
         } catch (connErr) {
           console.log('[ws-proxy] upstream ws create FAILED:', connErr?.message || connErr);
           addLog('upstream_ws_create_failed', stringifyError(connErr));
@@ -557,6 +555,14 @@ function createProxyHandler(upstreamUrl, targetHost, originalRequest, debug) {
             console.log('[ws-proxy] upstream WS error:', ev?.error || ev);
             onUpstreamError(ev?.error || ev);
           });
+          // Delayed readyState check for native WS
+          console.log('[ws-proxy] native ws readyState:', upstream?.readyState);
+          setTimeout(() => {
+            console.log('[ws-proxy] native ws after 1s, readyState:', upstream?.readyState);
+          }, 1000);
+          setTimeout(() => {
+            console.log('[ws-proxy] native ws after 5s, readyState:', upstream?.readyState);
+          }, 5000);
         }
         console.log('[ws-proxy] upstream handlers registered');
         addLog('upstream_handlers_registered');
