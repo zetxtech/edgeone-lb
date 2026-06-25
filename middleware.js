@@ -11,21 +11,6 @@ export async function middleware(context) {
   const url = new URL(request.url);
   const upgrade = request.headers.get('upgrade');
 
-  // Diagnostic: prove middleware runs for this request.
-  // Check with: lb_kv.get('ws-diag:last-request')
-  context.waitUntil?.((async () => {
-    try {
-      if (typeof lb_kv !== 'undefined') {
-        await lb_kv.put('ws-diag:last-request', JSON.stringify({
-          time: new Date().toISOString(),
-          url: request.url,
-          upgrade: upgrade || null,
-          pathname: url.pathname,
-        }), { expirationTtl: 300 });
-      }
-    } catch {}
-  })());
-
   if (url.pathname === '/__ws_proxy' || isInternalProxyPath(url.pathname)) {
     return next();
   }
@@ -35,20 +20,6 @@ export async function middleware(context) {
   }
 
   if (upgrade?.toLowerCase() === 'websocket') {
-    // Diagnostic: write to KV so we can confirm middleware ran.
-    // Check with: lb_kv.get('ws-diag:middleware-hit')
-    context.waitUntil?.((async () => {
-      try {
-        if (typeof lb_kv !== 'undefined') {
-          await lb_kv.put('ws-diag:middleware-hit', JSON.stringify({
-            time: new Date().toISOString(),
-            url: request.url,
-            upgrade: request.headers.get('upgrade'),
-            allHeaders: Object.fromEntries(request.headers.entries()),
-          }), { expirationTtl: 300 });
-        }
-      } catch {}
-    })());
     return onWebSocketProxyRequest(context);
   }
 
