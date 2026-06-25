@@ -58,11 +58,15 @@ function safeSerialize(value, depth) {
   return value;
 }
 
+var _waitUntil = null;
+
 function persistLog(record) {
   try {
     if (typeof lb_kv === 'undefined') return;
     var key = DEBUG_LOG_KEY_PREFIX + record.id;
-    lb_kv.put(key, JSON.stringify(record), { expirationTtl: DEBUG_LOG_TTL }).catch(function () {});
+    var p = lb_kv.put(key, JSON.stringify(record), { expirationTtl: DEBUG_LOG_TTL });
+    if (_waitUntil) _waitUntil(p);
+    p.catch(function () {});
   } catch {}
 }
 
@@ -167,13 +171,24 @@ async function onRequest(context) {
     // Diagnostic HTTP endpoint: ?diag=1
     if (url.searchParams.get('diag') === '1') {
       var wsInfo = await resolveWebSocketCtor();
+      // Probe all globalThis keys for platform APIs
+      var gkeys = [];
+      try { gkeys = Object.keys(globalThis); } catch {}
+      var interesting = gkeys.filter(function (k) {
+        var lk = k.toLowerCase();
+        return lk.indexOf('page') !== -1 || lk.indexOf('edge') !== -1 || lk.indexOf('socket') !== -1 ||
+          lk.indexOf('net') !== -1 || lk.indexOf('ai') !== -1 || lk.indexOf('ws') !== -1 ||
+          lk.indexOf('fetch') !== -1 || lk.indexOf('http') !== -1 || lk.indexOf('proxy') !== -1 ||
+          lk.indexOf('connect') !== -1 || lk.indexOf('stream') !== -1 || lk.indexOf('worker') !== -1;
+      });
       return new Response(JSON.stringify({
         ok: true, version: PROXY_VERSION,
-        upgrade: upgradeHeader || null,
         ws: wsInfo ? { available: true, source: wsInfo.source, name: wsInfo.ctor.name || null } : { available: false },
         globalThisWebSocket: typeof globalThis !== 'undefined' ? typeof globalThis.WebSocket : 'n/a',
         globalWebSocket: typeof WebSocket,
         lb_kv: typeof lb_kv,
+        platformGlobals: interesting,
+        allGlobalsCount: gkeys.length,
       }, null, 2), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }
 
@@ -211,6 +226,7 @@ async function onRequest(context) {
 
     var upstreamUrl = buildUpstreamWsUrl(targetHost, request.url, originalPath, originalSearch, originalProto);
 
+    _waitUntil = context.waitUntil ? context.waitUntil.bind(context) : null;
     return { websocket: createProxyHandler(upstreamUrl, targetHost, request, debug) };
   } catch (err) {
     return new Response(JSON.stringify({ error: 'Internal Error', version: PROXY_VERSION, detail: stringifyErr(err) }), {
@@ -287,6 +303,16 @@ function createProxyHandler(upstreamUrl, targetHost, originalRequest, debug) {
     async onopen(ws, request) {
       try {
         client = ws;
+        // Guaranteed KV hit — proves onopen was called
+        (function () {
+          try {
+            if (typeof lb_kv !== 'undefined') {
+              var p = lb_kv.put('ws_diag_v6_onopen', JSON.stringify({ t: new Date().toISOString(), url: originalRequest.url }), { expirationTtl: 300 });
+              if (_waitUntil) _waitUntil(p);
+              p.catch(function () {});
+            }
+          } catch {}
+        })();
         step('onopen_enter', { url: originalRequest.url });
 
         // 1. Resolve WebSocket constructor
@@ -324,18 +350,13 @@ function createProxyHandler(upstreamUrl, targetHost, originalRequest, debug) {
 
         step('client_headers', { origin: clientOrigin || null, protocol: clientProtocol || null });
 
-        // 3. Create upstream WebSocket
-        var options = { perMessageDeflate: false };
-        if (clientOrigin && isWsLib) {
-          options.origin = clientOrigin;
-        }
-
-        step('upstream_creating', { url: upstreamUrl, origin: options.origin || null });
+        // 3. Create upstream WebSocket — bare constructor, no options.
+        // The platform's _WebSocket uses the platform networking stack.
+        // Options like 'origin' and 'handshakeTimeout' may interfere.
+        step('upstream_creating', { url: upstreamUrl });
 
         try {
-          upstream = clientProtocol
-            ? new Ctor(upstreamUrl, clientProtocol, options)
-            : new Ctor(upstreamUrl, options);
+          upstream = new Ctor(upstreamUrl);
         } catch (newErr) {
           step('upstream_new_failed', stringifyErr(newErr));
           safeClose(ws, 1011, 'Upstream create failed');
@@ -442,12 +463,32 @@ function createProxyHandler(upstreamUrl, targetHost, originalRequest, debug) {
 
     async onclose(ws, code, reason) {
       var r = reason && typeof reason.toString === 'function' ? reason.toString() : '';
+      // Guaranteed KV hit
+      (function () {
+        try {
+          if (typeof lb_kv !== 'undefined') {
+            var p = lb_kv.put('ws_diag_v6_onclose', JSON.stringify({ t: new Date().toISOString(), code: code, reason: r }), { expirationTtl: 300 });
+            if (_waitUntil) _waitUntil(p);
+            p.catch(function () {});
+          }
+        } catch {}
+      })();
       step('client_close', { code: code, reason: r });
       try { if (upstream && typeof upstream.close === 'function') upstream.close(sanitizeCode(code), r); } catch {}
       cleanup('client_closed', { code: sanitizeCode(code), reason: r });
     },
 
     async onerror(err) {
+      // Guaranteed KV hit
+      (function () {
+        try {
+          if (typeof lb_kv !== 'undefined') {
+            var p = lb_kv.put('ws_diag_v6_onerror', JSON.stringify({ t: new Date().toISOString() }), { expirationTtl: 300 });
+            if (_waitUntil) _waitUntil(p);
+            p.catch(function () {});
+          }
+        } catch {}
+      })();
       step('client_error', stringifyErr(err));
       try { if (upstream && typeof upstream.close === 'function') upstream.close(1011, 'Client error'); } catch {}
       cleanup('error', { code: 1011, reason: 'Client error', error: stringifyErr(err) });
