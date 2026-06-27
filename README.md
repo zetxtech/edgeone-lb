@@ -1,6 +1,6 @@
 # EdgeOne Load Balancer Admin Panel
 
-基于 EdgeOne Pages 的负载均衡管理面板，通过 Middleware、Edge Functions 与 Node Functions 协同处理管理端和 HTTP 代理。WebSocket 请求通过 302 重定向让客户端直连上游。
+基于 EdgeOne Pages 的负载均衡管理面板，通过 Middleware、Edge Functions 协同处理管理端和 HTTP 代理。
 
 ## 架构
 
@@ -10,7 +10,6 @@
 ├─────────────────────────────────────────────────────────────┤
 │  middleware.js (Runs on Edge Nodes)                         │
 │  ├── admin hostname  ─────────► next() ──────► Nuxt SSR     │
-│  ├── WebSocket       ────────► 302 redirect ► upstream      │
 │  └── HTTP proxy ─────────────► rewrite() ───► Edge Fn       │
 │                                                             │
 │  lb-proxy.js                                                │
@@ -29,7 +28,7 @@
 
 **架构说明：**
 
-- **Middleware 只负责分流与改写**：管理域名走 Nuxt，HTTP 代理请求 rewrite 到 Edge Functions，WebSocket 请求返回 302 让客户端直连上游
+- **Middleware 只负责分流与改写**：管理域名走 Nuxt，HTTP 代理请求 rewrite 到 Edge Functions
 - **管理面板使用 Nuxt**：管理域名（如 `*.edgeone.run`）的请求通过 `next()` 传递给 Nuxt 进行 SSR 渲染
 - **共享代理逻辑在 lb-proxy.js**：HTTP 代理、健康检查、调试日志复用同一套规则读取与候选排序逻辑
 - **API 使用 Edge Functions**：规则管理、调试日志和导出接口都由 Edge Functions 提供

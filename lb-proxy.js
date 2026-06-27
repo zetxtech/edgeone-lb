@@ -909,68 +909,11 @@ export async function onAdminHealthRequest(context) {
     }, status);
   }
 }
-export async function onWebSocketProxyRequest(context) {
-  const { request } = context;
-  const originalUrl = new URL(request.url);
-  originalUrl.pathname = getOriginalProxyPath(originalUrl.pathname);
-  const hostname = originalUrl.hostname;
-
-  if (isAdminHostname(hostname)) {
-    return new Response('Not found', { status: 404 });
-  }
-
-  if (typeof lb_kv === 'undefined') {
-    return jsonResponse({ error: 'KV namespace not bound' }, 503);
-  }
-
-  const rules = await lb_kv.get('rules', { type: 'json' }) || {};
-  const rule = rules[hostname];
-
-  if (!rule) {
-    return jsonResponse({ error: `Domain ${hostname} not configured` }, 404);
-  }
-
-  const targets = Array.isArray(rule.targets) ? rule.targets : [];
-  if (targets.length === 0) {
-    return jsonResponse({ error: 'No WebSocket backend available' }, 503);
-  }
-
-  const cache = await caches.open(METRICS_CACHE_NAME);
-  const candidates = await getSortedCandidates(targets, cache);
-  const wsTarget = candidates[0]?.target;
-
-  if (!wsTarget) {
-    return jsonResponse({ error: 'No WebSocket backend available' }, 503);
-  }
-
-  // Build upstream WebSocket URL and redirect the client there
-  const proto = request.headers.get('x-forwarded-proto')
-    || request.headers.get('X-Forwarded-Proto')
-    || originalUrl.protocol.replace(':', '');
-  const wsProto = (proto === 'https' || proto === 'wss') ? 'wss' : 'ws';
-  const parts = String(wsTarget.host).split(':');
-  const upstreamHost = parts[0];
-  const upstreamPort = parts[1] || '';
-  const upstreamPath = wsTarget.wsPath || originalUrl.pathname || '/';
-  const upstreamSearch = originalUrl.search || '';
-
-  let redirectUrl = `${wsProto}://${upstreamHost}`;
-  if (upstreamPort) redirectUrl += `:${upstreamPort}`;
-  redirectUrl += upstreamPath;
-  if (upstreamSearch) redirectUrl += upstreamSearch;
-
-  return Response.redirect(redirectUrl, 302);
-}
 export async function onProxyRequest(context) {
   const { request, clientIp, geo, waitUntil } = context;
   const originalUrl = new URL(request.url);
   originalUrl.pathname = getOriginalProxyPath(originalUrl.pathname);
   const hostname = originalUrl.hostname;
-
-  // Detect WebSocket upgrade via Sec-WebSocket-Key (Upgrade header is stripped by platform)
-  if (request.headers.get('sec-websocket-key')) {
-    return onWebSocketProxyRequest(context);
-  }
   const debugUserAgent = request.headers.get('user-agent') || '';
   const debugRequestedByHeader = request.headers.has(DEBUG_HEADER);
   const debugRequestedByUserAgent = debugUserAgent.includes(DEBUG_HEADER);

@@ -1,4 +1,4 @@
-import { isAdminHostname, onWebSocketProxyRequest } from './lb-proxy.js';
+import { isAdminHostname } from './lb-proxy.js';
 
 const INTERNAL_HTTP_PROXY_PREFIX = '/__proxy';
 
@@ -9,18 +9,12 @@ function isInternalProxyPath(pathname) {
 export async function middleware(context) {
   const { request, next, rewrite } = context;
   const url = new URL(request.url);
-  const upgrade = request.headers.get('upgrade');
-
   if (isInternalProxyPath(url.pathname)) {
     return next();
   }
 
   if (isAdminHostname(url.hostname)) {
     return next();
-  }
-
-  if (upgrade?.toLowerCase() === 'websocket') {
-    return onWebSocketProxyRequest(context);
   }
 
   const proxyUrl = new URL(url);
