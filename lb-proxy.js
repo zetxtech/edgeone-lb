@@ -910,7 +910,7 @@ export async function onAdminHealthRequest(context) {
   }
 }
 export async function onWebSocketProxyRequest(context) {
-  const { request, rewrite } = context;
+  const { request } = context;
   const originalUrl = new URL(request.url);
   const hostname = originalUrl.hostname;
 
@@ -918,40 +918,20 @@ export async function onWebSocketProxyRequest(context) {
     return new Response('Not found', { status: 404 });
   }
 
-  if (typeof rewrite !== 'function') {
-    return jsonResponse({
-      error: 'Middleware rewrite is unavailable',
-    }, 500);
-  }
-
   if (typeof lb_kv === 'undefined') {
-    return jsonResponse({
-      error: 'KV namespace not bound',
-      message: 'Please bind KV namespace with variable name "lb_kv" in EdgeOne Pages settings',
-    }, 503);
+    return jsonResponse({ error: 'KV namespace not bound' }, 503);
   }
 
   const rules = await lb_kv.get('rules', { type: 'json' }) || {};
   const rule = rules[hostname];
 
   if (!rule) {
-    return jsonResponse({
-      error: `Domain ${hostname} not configured`,
-      hostname,
-      availableDomains: Object.keys(rules),
-    }, 404);
-  }
-
-  if (rule.forceHttps && originalUrl.protocol === 'http:') {
-    originalUrl.protocol = 'https:';
-    return Response.redirect(originalUrl.toString(), 302);
+    return jsonResponse({ error: `Domain ${hostname} not configured` }, 404);
   }
 
   const targets = Array.isArray(rule.targets) ? rule.targets : [];
   if (targets.length === 0) {
-    return jsonResponse({
-      error: 'No WebSocket backend available',
-    }, 503);
+    return jsonResponse({ error: 'No WebSocket backend available' }, 503);
   }
 
   const cache = await caches.open(METRICS_CACHE_NAME);
@@ -959,40 +939,26 @@ export async function onWebSocketProxyRequest(context) {
   const wsTarget = candidates[0]?.target;
 
   if (!wsTarget) {
-    return jsonResponse({
-      error: 'No WebSocket backend available',
-    }, 503);
+    return jsonResponse({ error: 'No WebSocket backend available' }, 503);
   }
 
-  const proxyUrl = new URL(originalUrl);
-  proxyUrl.pathname = '/__ws_proxy';
-  proxyUrl.search = '';
-  proxyUrl.searchParams.set('target', wsTarget.host);
-  proxyUrl.searchParams.set('path', wsTarget.wsPath || '/');
-  proxyUrl.searchParams.set('search', originalUrl.search);
-  proxyUrl.searchParams.set(
-    'proto',
-    request.headers.get('x-forwarded-proto')
-      || request.headers.get('X-Forwarded-Proto')
-      || originalUrl.protocol.replace(':', ''),
-  );
-  proxyUrl.protocol = 'https:';
+  // Build upstream WebSocket URL and redirect the client there
+  const proto = request.headers.get('x-forwarded-proto')
+    || request.headers.get('X-Forwarded-Proto')
+    || originalUrl.protocol.replace(':', '');
+  const wsProto = (proto === 'https' || proto === 'wss') ? 'wss' : 'ws';
+  const parts = String(wsTarget.host).split(':');
+  const upstreamHost = parts[0];
+  const upstreamPort = parts[1] || '';
+  const upstreamPath = wsTarget.wsPath || originalUrl.pathname || '/';
+  const upstreamSearch = originalUrl.search || '';
 
-  if (shouldExposeDebugInfo(request)) {
-    proxyUrl.searchParams.set('_debug', '1');
-  }
+  let redirectUrl = `${wsProto}://${upstreamHost}`;
+  if (upstreamPort) redirectUrl += `:${upstreamPort}`;
+  redirectUrl += upstreamPath;
+  if (upstreamSearch) redirectUrl += upstreamSearch;
 
-  // Forward critical WebSocket headers via URL params, because the
-  // platform's rewrite does NOT preserve the original client headers.
-  const forwardHeader = (name, param) => {
-    const val = request.headers.get(name);
-    if (val) proxyUrl.searchParams.set(param, val);
-  };
-  forwardHeader('origin', '_h_origin');
-  forwardHeader('sec-websocket-protocol', '_h_protocol');
-  forwardHeader('user-agent', '_h_ua');
-
-  return rewrite(proxyUrl.toString());
+  return Response.redirect(redirectUrl, 302);
 }
 export async function onProxyRequest(context) {
   const { request, clientIp, geo, waitUntil } = context;

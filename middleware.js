@@ -11,7 +11,7 @@ export async function middleware(context) {
   const url = new URL(request.url);
   const upgrade = request.headers.get('upgrade');
 
-  if (url.pathname === '/__ws_proxy' || isInternalProxyPath(url.pathname)) {
+  if (isInternalProxyPath(url.pathname)) {
     return next();
   }
 
