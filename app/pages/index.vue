@@ -2,7 +2,7 @@
   <div class="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-slate-100">
     <main class="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
       <!-- Header -->
-      <section class="mb-8 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+      <section class="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p class="mb-2 text-xs font-semibold uppercase tracking-[0.35em] text-cyan-400">EdgeOne</p>
           <h1 class="text-3xl font-semibold tracking-tight text-white sm:text-4xl">{{ t.title }}</h1>
@@ -13,13 +13,69 @@
             @click="lang = lang === 'en' ? 'zh' : 'en'"
             class="rounded-lg border border-slate-600/50 bg-slate-800/50 px-3 py-2 text-sm text-slate-300 transition hover:border-slate-500/50 hover:text-white"
           >{{ t.langSwitch }}</button>
-          <button
-            @click="showAddDomain = true"
-            class="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-500 px-4 py-2.5 text-sm font-medium text-white transition hover:from-cyan-400 hover:to-blue-400"
-          >
-            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" /></svg>
-            {{ t.addDomain }}
-          </button>
+        </div>
+      </section>
+
+      <!-- Global Monitoring -->
+      <section class="mb-6 overflow-hidden rounded-2xl border border-slate-700/50 bg-slate-800/50 backdrop-blur-sm">
+        <div class="flex flex-col gap-4 border-b border-slate-700/50 px-6 py-5 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <div class="text-xs font-medium uppercase tracking-[0.25em] text-cyan-400">{{ t.globalMonitoring }}</div>
+            <h2 class="mt-1 text-lg font-semibold text-white">{{ t.globalMonitoringTitle }}</h2>
+            <p class="mt-2 max-w-3xl text-sm leading-6 text-slate-400">{{ t.globalMonitoringDesc }}</p>
+          </div>
+          <div class="flex flex-wrap items-center gap-2">
+            <button @click="showAddDomain = true" class="inline-flex items-center gap-2 rounded-xl border border-slate-600/50 bg-slate-900/40 px-4 py-2.5 text-sm font-medium text-slate-200 transition hover:border-slate-500/50 hover:bg-slate-900/60 hover:text-white">
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" /></svg>
+              {{ t.addDomain }}
+            </button>
+            <button @click="refreshAllHealthChecks" :disabled="healthReportLoading" class="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-500 px-4 py-2.5 text-sm font-medium text-white transition hover:from-cyan-400 hover:to-blue-400 disabled:cursor-not-allowed disabled:opacity-60">
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8 8 0 004.582 9m0 0H9m11 11v-5h-.581m0 0A8.001 8.001 0 004.582 15m14.834 0H15" /></svg>
+              {{ healthReportLoading ? t.refreshing : t.triggerAllChecks }}
+            </button>
+          </div>
+        </div>
+        <div class="grid gap-4 border-b border-slate-700/30 px-6 py-5 lg:grid-cols-2">
+          <div tabindex="0" @click="copyToClipboard(globalHealthReportUrl)" @keydown.enter.prevent="copyToClipboard(globalHealthReportUrl)" @keydown.space.prevent="copyToClipboard(globalHealthReportUrl)" class="group flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-cyan-500/20 bg-cyan-500/5 px-4 py-3 transition hover:border-cyan-400/40 hover:bg-cyan-500/10">
+            <div class="min-w-0">
+              <div class="text-[11px] font-medium uppercase tracking-[0.25em] text-cyan-400">{{ t.globalHealthReport }}</div>
+              <code class="mt-1 block truncate font-mono text-sm text-cyan-300">{{ globalHealthReportUrl }}</code>
+            </div>
+            <span class="shrink-0 text-xs font-medium text-cyan-400 transition group-hover:text-cyan-300">{{ t.copy }}</span>
+          </div>
+          <div tabindex="0" @click="copyToClipboard(globalTriggerHealthCheckUrl)" @keydown.enter.prevent="copyToClipboard(globalTriggerHealthCheckUrl)" @keydown.space.prevent="copyToClipboard(globalTriggerHealthCheckUrl)" class="group flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3 transition hover:border-amber-400/40 hover:bg-amber-500/10">
+            <div class="min-w-0">
+              <div class="text-[11px] font-medium uppercase tracking-[0.25em] text-amber-400">{{ t.globalTriggerChecks }}</div>
+              <code class="mt-1 block truncate font-mono text-sm text-amber-300">{{ globalTriggerHealthCheckUrl }}</code>
+            </div>
+            <span class="shrink-0 text-xs font-medium text-amber-400 transition group-hover:text-amber-300">{{ t.copy }}</span>
+          </div>
+        </div>
+        <div class="grid gap-3 px-6 py-5 sm:grid-cols-2 xl:grid-cols-5">
+          <div class="rounded-xl border border-slate-700/50 bg-slate-900/40 px-4 py-3">
+            <div class="text-[11px] font-medium uppercase tracking-[0.25em] text-slate-500">{{ t.domains }}</div>
+            <div class="mt-2 text-2xl font-semibold text-white">{{ healthOverview.totalDomains }}</div>
+          </div>
+          <div class="rounded-xl border border-slate-700/50 bg-slate-900/40 px-4 py-3">
+            <div class="text-[11px] font-medium uppercase tracking-[0.25em] text-slate-500">{{ t.targets }}</div>
+            <div class="mt-2 text-2xl font-semibold text-white">{{ healthOverview.totalTargets }}</div>
+          </div>
+          <div class="rounded-xl border border-slate-700/50 bg-slate-900/40 px-4 py-3">
+            <div class="text-[11px] font-medium uppercase tracking-[0.25em] text-emerald-400">{{ t.healthy }}</div>
+            <div class="mt-2 text-2xl font-semibold text-emerald-300">{{ healthOverview.healthy }}</div>
+          </div>
+          <div class="rounded-xl border border-slate-700/50 bg-slate-900/40 px-4 py-3">
+            <div class="text-[11px] font-medium uppercase tracking-[0.25em] text-rose-400">{{ t.unhealthy }}</div>
+            <div class="mt-2 text-2xl font-semibold text-rose-300">{{ healthOverview.unhealthy }}</div>
+          </div>
+          <div class="rounded-xl border border-slate-700/50 bg-slate-900/40 px-4 py-3 sm:col-span-2 xl:col-span-1">
+            <div class="text-[11px] font-medium uppercase tracking-[0.25em] text-amber-400">{{ t.pending }}</div>
+            <div class="mt-2 text-2xl font-semibold text-amber-300">{{ healthOverview.pending }}</div>
+          </div>
+        </div>
+        <div class="px-6 pb-5 text-xs text-slate-500">
+          <span>{{ t.lastUpdated }}: {{ healthReportLastUpdated ? formatDateTime(healthReportLastUpdated) : t.neverRefreshed }}</span>
+          <span v-if="healthReportError" class="ml-3 text-rose-300">{{ healthReportError }}</span>
         </div>
       </section>
 
@@ -42,6 +98,11 @@
                   <span class="inline-flex items-center rounded border border-slate-600/30 bg-slate-700/50 px-2 py-0.5 text-xs font-medium text-slate-300">{{ rule.forceHttps ? t.forceHttps : t.httpsOptional }}</span>
                   <span class="inline-flex items-center rounded border border-slate-600/30 bg-slate-700/50 px-2 py-0.5 text-xs font-medium text-slate-300">{{ rule.targets.length }} {{ t.backendTargets }}</span>
                 </div>
+                <div v-if="getDomainHealthSummary(domain).total > 0" class="mt-3 flex flex-wrap gap-2">
+                  <span class="inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-medium text-emerald-300">{{ t.healthy }} {{ getDomainHealthSummary(domain).healthy }}</span>
+                  <span class="inline-flex items-center rounded-full border border-rose-500/20 bg-rose-500/10 px-2.5 py-1 text-[11px] font-medium text-rose-300">{{ t.unhealthy }} {{ getDomainHealthSummary(domain).unhealthy }}</span>
+                  <span class="inline-flex items-center rounded-full border border-amber-500/20 bg-amber-500/10 px-2.5 py-1 text-[11px] font-medium text-amber-300">{{ t.pending }} {{ getDomainHealthSummary(domain).pending }}</span>
+                </div>
               </div>
               <div class="flex items-center gap-1">
                 <button @click="editDomain(domain)" class="rounded-lg p-2 text-slate-400 transition hover:bg-slate-700/50 hover:text-white" :title="t.edit">
@@ -58,14 +119,23 @@
           <div class="px-6 py-4">
             <div class="mb-3 text-xs font-medium uppercase tracking-[0.25em] text-slate-500">{{ t.backendTargets }}</div>
             <div class="space-y-2">
-              <div v-for="(target, idx) in rule.targets" :key="idx" class="group flex items-center justify-between rounded-lg bg-slate-900/50 px-3 py-2">
-                <div class="flex items-center gap-3">
-                  <span :class="getTypeBadgeClass(target.type)" class="rounded px-2 py-0.5 text-xs font-medium uppercase">{{ target.type }}</span>
-                  <code class="font-mono text-sm text-slate-300">{{ target.host }}</code>
+              <div v-for="(target, idx) in rule.targets" :key="idx" class="group flex flex-col gap-3 rounded-lg bg-slate-900/50 px-3 py-3 md:flex-row md:items-center md:justify-between">
+                <div class="flex min-w-0 items-start gap-3">
+                  <span :class="getTypeBadgeClass(target.type)" class="shrink-0 rounded px-2 py-0.5 text-xs font-medium uppercase">{{ target.type }}</span>
+                  <div class="min-w-0">
+                    <code class="block truncate font-mono text-sm text-slate-200">{{ target.host }}</code>
+                    <div class="mt-1 text-xs text-slate-500">{{ getTargetHealth(domain, target.host).reason || t.noHealthData }}</div>
+                  </div>
                 </div>
-                <button @click="removeTarget(domain, idx)" class="p-1 text-slate-500 opacity-0 transition group-hover:opacity-100 hover:text-red-400" :title="t.removeTarget">
-                  <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
-                </button>
+                <div class="flex items-center gap-3 md:justify-end">
+                  <div class="text-right">
+                    <span :class="getHealthBadgeClass(getTargetHealth(domain, target.host).status)" class="inline-flex rounded px-2 py-0.5 text-[11px] font-medium uppercase tracking-[0.2em]">{{ getHealthStatusText(getTargetHealth(domain, target.host).status) }}</span>
+                    <div class="mt-1 text-xs text-slate-500">{{ getTargetHealth(domain, target.host).latency || '—' }}</div>
+                  </div>
+                  <button @click="removeTarget(domain, idx)" class="rounded p-1 text-slate-500 transition hover:text-rose-400" :title="t.removeTarget">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+                  </button>
+                </div>
               </div>
               <div v-if="rule.targets.length === 0" class="py-4 text-center text-sm text-slate-500">{{ t.noTargets }}</div>
             </div>
@@ -120,24 +190,24 @@
       <section class="mt-8 overflow-hidden rounded-2xl border border-slate-700/50 bg-slate-800/50 backdrop-blur-sm">
         <button @click="debugLogsExpanded = !debugLogsExpanded" class="flex w-full items-center justify-between px-6 py-4 text-left transition hover:bg-slate-700/20">
           <div>
-            <div class="text-xs font-medium uppercase tracking-[0.25em] text-fuchsia-400">{{ t.debugLogs }}</div>
-            <p class="mt-1 text-sm text-slate-500">{{ t.debugLogsDesc }} <code class="font-mono text-fuchsia-400">EdgeoneLBDebugger</code> {{ t.debugLogsHint }}</p>
+            <div class="text-xs font-medium uppercase tracking-[0.25em] text-amber-400">{{ t.debugLogs }}</div>
+            <p class="mt-1 text-sm text-slate-500">{{ t.debugLogsDesc }} <code class="font-mono text-cyan-400">EdgeoneLBDebugger</code> {{ t.debugLogsHint }}</p>
           </div>
           <div class="flex items-center gap-3">
-            <span v-if="debugLogs.length > 0" class="rounded-full bg-fuchsia-500/20 px-2 py-0.5 text-xs font-medium text-fuchsia-300">{{ debugLogs.length }}</span>
+            <span v-if="debugLogs.length > 0" class="rounded-full bg-amber-500/20 px-2 py-0.5 text-xs font-medium text-amber-300">{{ debugLogs.length }}</span>
             <svg :class="['h-4 w-4 text-slate-500 transition-transform', debugLogsExpanded ? 'rotate-180' : '']" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" /></svg>
           </div>
         </button>
         <div v-if="debugLogsExpanded" class="border-t border-slate-700/30 px-6 py-4">
           <div class="mb-4 flex justify-end">
-            <button @click="loadDebugLogs" :disabled="debugLogsLoading" class="inline-flex items-center justify-center rounded-xl border border-fuchsia-500/30 bg-fuchsia-500/10 px-4 py-2 text-sm font-medium text-fuchsia-300 transition hover:bg-fuchsia-500/20 disabled:cursor-not-allowed disabled:opacity-60">
+            <button @click="loadDebugLogs" :disabled="debugLogsLoading" class="inline-flex items-center justify-center rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-sm font-medium text-amber-300 transition hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-60">
               {{ debugLogsLoading ? t.refreshing : t.refreshLogs }}
             </button>
           </div>
           <div v-if="debugLogsError" class="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-300">{{ debugLogsError }}</div>
           <div v-else-if="debugLogs.length > 0" class="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
             <div class="space-y-2">
-              <button v-for="item in debugLogs" :key="item.id" type="button" @click="selectDebugLog(item.id)" :class="['w-full rounded-xl border px-4 py-3 text-left transition', selectedDebugLogId === item.id ? 'border-fuchsia-400/40 bg-fuchsia-500/10' : 'border-slate-700/50 bg-slate-900/40 hover:border-slate-600/50 hover:bg-slate-900/70']">
+              <button v-for="item in debugLogs" :key="item.id" type="button" @click="selectDebugLog(item.id)" :class="['w-full rounded-xl border px-4 py-3 text-left transition', selectedDebugLogId === item.id ? 'border-cyan-400/40 bg-cyan-500/10' : 'border-slate-700/50 bg-slate-900/40 hover:border-slate-600/50 hover:bg-slate-900/70']">
                 <div class="flex flex-wrap items-center justify-between gap-2">
                   <div class="font-mono text-sm text-white">{{ item.request?.method || 'UNKNOWN' }} {{ item.request?.pathname || '/' }}</div>
                   <span :class="getOutcomeBadgeClass(item.outcome)" class="rounded px-2 py-0.5 text-[11px] font-medium uppercase tracking-[0.2em]">{{ item.outcome || 'unknown' }}</span>
@@ -258,6 +328,19 @@ const i18n = {
     title: 'Load Balancer Admin',
     subtitle: 'Manage domain rules and backend targets for your EdgeOne Pages load balancer.',
     addDomain: 'Add Domain',
+    globalMonitoring: 'Global Monitoring',
+    globalMonitoringTitle: 'Report and refresh all configured domains',
+    globalMonitoringDesc: 'Keep these URLs visible for external checks and manual refreshes. Every domain also keeps its own monitoring endpoints inside the card.',
+    globalHealthReport: 'Health Report URL',
+    globalTriggerChecks: 'Trigger All Checks',
+    lastUpdated: 'Last updated',
+    neverRefreshed: 'Never refreshed',
+    domains: 'Domains',
+    healthy: 'Healthy',
+    unhealthy: 'Unhealthy',
+    pending: 'Pending',
+    unknown: 'Unknown',
+    noHealthData: 'No health data yet',
     noDomains: 'No domains configured',
     noDomainsHint: 'Get started by adding your first domain.',
     targets: 'Targets',
@@ -308,6 +391,19 @@ const i18n = {
     title: '\u8d1f\u8f7d\u5747\u8861\u7ba1\u7406',
     subtitle: '\u7ba1\u7406 EdgeOne Pages \u8d1f\u8f7d\u5747\u8861\u7684\u57df\u540d\u89c4\u5219\u548c\u540e\u7aef\u76ee\u6807\u3002',
     addDomain: '\u6dfb\u52a0\u57df\u540d',
+    globalMonitoring: '\u5168\u5c40\u76d1\u63a7',
+    globalMonitoringTitle: '\u67e5\u770b\u548c\u5237\u65b0\u6240\u6709\u57df\u540d\u7684\u5065\u5eb7\u72b6\u6001',
+    globalMonitoringDesc: '\u8fd9\u4e24\u4e2a\u5730\u5740\u7528\u4e8e\u5916\u90e8\u5b9a\u65f6\u68c0\u6d4b\u548c\u624b\u52a8\u5237\u65b0\u3002\u6bcf\u4e2a\u57df\u540d\u4e5f\u4fdd\u7559\u81ea\u5df1\u7684\u76d1\u63a7\u7aef\u70b9\u3002',
+    globalHealthReport: '\u5065\u5eb7\u62a5\u544a\u5730\u5740',
+    globalTriggerChecks: '\u89e6\u53d1\u5168\u90e8\u68c0\u67e5',
+    lastUpdated: '\u6700\u540e\u66f4\u65b0',
+    neverRefreshed: '\u4ece\u672a\u5237\u65b0',
+    domains: '\u57df\u540d\u6570',
+    healthy: '\u5065\u5eb7',
+    unhealthy: '\u4e0d\u5065\u5eb7',
+    pending: '\u7b49\u5f85\u4e2d',
+    unknown: '\u672a\u77e5',
+    noHealthData: '\u6682\u65e0\u5065\u5eb7\u6570\u636e',
     noDomains: '\u6682\u65e0\u57df\u540d\u914d\u7f6e',
     noDomainsHint: '\u6dfb\u52a0\u4f60\u7684\u7b2c\u4e00\u4e2a\u57df\u540d\u4ee5\u5f00\u59cb\u4f7f\u7528\u3002',
     targets: '\u76ee\u6807',
@@ -360,6 +456,10 @@ const lang = ref('zh')
 const t = computed(() => i18n[lang.value])
 
 const rules = ref({})
+const healthReports = ref({})
+const healthReportLoading = ref(false)
+const healthReportError = ref('')
+const healthReportLastUpdated = ref('')
 const showAddDomain = ref(false)
 const showAddTarget = ref(false)
 const editingDomain = ref(null)
@@ -375,10 +475,60 @@ const expandedHealthChecks = ref({})
 const domainForm = ref({ domain: '', healthPath: '/', forceHttps: true })
 const targetForm = ref({ host: '', type: 'frp' })
 
-onMounted(async () => { await loadRules() })
+const requestUrl = useRequestURL()
+const globalHealthReportUrl = computed(() => new URL('/_health', requestUrl.origin).toString())
+const globalTriggerHealthCheckUrl = computed(() => new URL('/_trigger_health_check', requestUrl.origin).toString())
+
+const healthOverview = computed(() => {
+  const totalDomains = Object.keys(rules.value || {}).length
+  const totalTargets = Object.values(rules.value || {}).reduce((count, rule) => count + (Array.isArray(rule?.targets) ? rule.targets.length : 0), 0)
+  const summary = { healthy: 0, unhealthy: 0, pending: 0, unknown: 0 }
+  for (const domainData of Object.values(healthReports.value || {})) {
+    for (const info of Object.values(domainData || {})) {
+      const status = info?.status || 'unknown'
+      if (summary[status] == null) {
+        summary.unknown += 1
+      } else {
+        summary[status] += 1
+      }
+    }
+  }
+  return { totalDomains, totalTargets, ...summary }
+})
+
+onMounted(async () => { await Promise.all([loadRules(), loadHealthReport()]) })
 
 async function loadRules() {
   try { rules.value = await $fetch('/api/rules') } catch (e) { console.error('Failed to load rules:', e) }
+}
+
+async function loadHealthReport() {
+  healthReportLoading.value = true
+  healthReportError.value = ''
+  try {
+    const response = await $fetch('/_health')
+    healthReports.value = response && typeof response === 'object' ? response : {}
+    healthReportLastUpdated.value = new Date().toISOString()
+  } catch (e) {
+    console.error('Failed to load health report:', e)
+    healthReportError.value = e?.data?.error || e?.message || 'Failed to load health report'
+  } finally {
+    healthReportLoading.value = false
+  }
+}
+
+async function refreshAllHealthChecks() {
+  healthReportLoading.value = true
+  healthReportError.value = ''
+  try {
+    await $fetch('/_trigger_health_check')
+    await loadHealthReport()
+  } catch (e) {
+    console.error('Failed to trigger health checks:', e)
+    healthReportError.value = e?.data?.error || e?.message || 'Failed to trigger health checks'
+  } finally {
+    healthReportLoading.value = false
+  }
 }
 
 async function loadDebugLogs() {
@@ -416,7 +566,7 @@ async function saveDomain() {
         rule: { forceHttps: domainForm.value.forceHttps, healthPath: domainForm.value.healthPath, targets: editingDomain.value ? rules.value[editingDomain.value].targets : [], platform: 'edgeone' },
       },
     })
-    await loadRules()
+    await Promise.all([loadRules(), loadHealthReport()])
     closeAddDomain()
   } catch (e) { console.error('Failed to save domain:', e); alert('Failed to save domain: ' + e.message) }
 }
@@ -424,6 +574,10 @@ async function saveDomain() {
 function editDomain(domain) {
   editingDomain.value = domain
   domainForm.value = { domain, healthPath: rules.value[domain].healthPath, forceHttps: rules.value[domain].forceHttps }
+  showAddDomain.value = true
+}
+
+function openAddDomain() {
   showAddDomain.value = true
 }
 
@@ -435,7 +589,7 @@ function closeAddDomain() {
 
 async function deleteDomain(domain) {
   if (!confirm(lang.value === 'zh' ? `\u786e\u5b9a\u5220\u9664\u57df\u540d "${domain}"\uff1f` : `Delete domain "${domain}"?`)) return
-  try { await $fetch(`/api/rules/${encodeURIComponent(domain)}`, { method: 'DELETE' }); await loadRules() }
+  try { await $fetch(`/api/rules/${encodeURIComponent(domain)}`, { method: 'DELETE' }); await Promise.all([loadRules(), loadHealthReport()]) }
   catch (e) { console.error('Failed to delete domain:', e) }
 }
 
@@ -443,20 +597,57 @@ function openAddTarget(domain) { targetDomain.value = domain; targetForm.value =
 
 async function saveTarget() {
   if (!targetForm.value.host) return
-  try { await $fetch(`/api/rules/${encodeURIComponent(targetDomain.value)}/targets`, { method: 'POST', body: targetForm.value }); await loadRules(); showAddTarget.value = false }
+  try { await $fetch(`/api/rules/${encodeURIComponent(targetDomain.value)}/targets`, { method: 'POST', body: targetForm.value }); await Promise.all([loadRules(), loadHealthReport()]); showAddTarget.value = false }
   catch (e) { console.error('Failed to add target:', e) }
 }
 
 async function removeTarget(domain, index) {
-  try { await $fetch(`/api/rules/${encodeURIComponent(domain)}/targets/${index}`, { method: 'DELETE' }); await loadRules() }
+  try { await $fetch(`/api/rules/${encodeURIComponent(domain)}/targets/${index}`, { method: 'DELETE' }); await Promise.all([loadRules(), loadHealthReport()]) }
   catch (e) { console.error('Failed to remove target:', e) }
 }
 
 function toggleHealthCheck(domain) { expandedHealthChecks.value[domain] = !expandedHealthChecks.value[domain] }
 
+function getTargetHealth(domain, host) {
+  return healthReports.value?.[domain]?.[host] || { status: 'pending', latency: null, last_update: null, reason: null }
+}
+
+function getDomainHealthSummary(domain) {
+  const entries = Object.values(healthReports.value?.[domain] || {})
+  return entries.reduce((summary, info) => {
+    const status = info?.status || 'unknown'
+    if (summary[status] == null) {
+      summary.unknown += 1
+    } else {
+      summary[status] += 1
+    }
+    summary.total += 1
+    return summary
+  }, { total: 0, healthy: 0, unhealthy: 0, pending: 0, unknown: 0 })
+}
+
 function getTypeBadgeClass(type) {
-  const classes = { frp: 'border border-purple-500/30 bg-purple-500/20 text-purple-300', tunnel: 'border border-blue-500/30 bg-blue-500/20 text-blue-300', direct: 'border border-emerald-500/30 bg-emerald-500/20 text-emerald-300' }
+  const classes = { frp: 'border border-amber-500/30 bg-amber-500/20 text-amber-300', tunnel: 'border border-sky-500/30 bg-sky-500/20 text-sky-300', direct: 'border border-emerald-500/30 bg-emerald-500/20 text-emerald-300' }
   return classes[type] || 'border border-slate-500/30 bg-slate-500/20 text-slate-300'
+}
+
+function getHealthBadgeClass(status) {
+  const classes = {
+    healthy: 'border border-emerald-500/30 bg-emerald-500/20 text-emerald-300',
+    unhealthy: 'border border-rose-500/30 bg-rose-500/20 text-rose-300',
+    pending: 'border border-amber-500/30 bg-amber-500/20 text-amber-300',
+    unknown: 'border border-slate-500/30 bg-slate-500/20 text-slate-300',
+  }
+  return classes[status] || classes.unknown
+}
+
+function getHealthStatusText(status) {
+  return {
+    healthy: t.value.healthy,
+    unhealthy: t.value.unhealthy,
+    pending: t.value.pending,
+    unknown: t.value.unknown,
+  }[status] || t.value.unknown
 }
 
 async function copyToClipboard(text) { try { await navigator.clipboard.writeText(text) } catch (e) { console.error('Failed to copy:', e) } }
