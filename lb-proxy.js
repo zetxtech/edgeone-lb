@@ -912,6 +912,7 @@ export async function onAdminHealthRequest(context) {
 export async function onWebSocketProxyRequest(context) {
   const { request } = context;
   const originalUrl = new URL(request.url);
+  originalUrl.pathname = getOriginalProxyPath(originalUrl.pathname);
   const hostname = originalUrl.hostname;
 
   if (isAdminHostname(hostname)) {
@@ -962,10 +963,14 @@ export async function onWebSocketProxyRequest(context) {
 }
 export async function onProxyRequest(context) {
   const { request, clientIp, geo, waitUntil } = context;
-  const requestStartedAt = Date.now();
   const originalUrl = new URL(request.url);
   originalUrl.pathname = getOriginalProxyPath(originalUrl.pathname);
   const hostname = originalUrl.hostname;
+
+  // Detect WebSocket upgrade via Sec-WebSocket-Key (Upgrade header is stripped by platform)
+  if (request.headers.get('sec-websocket-key')) {
+    return onWebSocketProxyRequest(context);
+  }
   const debugUserAgent = request.headers.get('user-agent') || '';
   const debugRequestedByHeader = request.headers.has(DEBUG_HEADER);
   const debugRequestedByUserAgent = debugUserAgent.includes(DEBUG_HEADER);
