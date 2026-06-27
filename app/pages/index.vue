@@ -2,18 +2,10 @@
   <div class="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-slate-100">
     <main class="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
       <!-- Header -->
-      <section class="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <p class="mb-2 text-xs font-semibold uppercase tracking-[0.35em] text-cyan-400">EdgeOne</p>
-          <h1 class="text-3xl font-semibold tracking-tight text-white sm:text-4xl">{{ t.title }}</h1>
-          <p class="mt-3 max-w-2xl text-sm leading-6 text-slate-400">{{ t.subtitle }}</p>
-        </div>
-        <div class="flex items-center gap-3">
-          <button
-            @click="lang = lang === 'en' ? 'zh' : 'en'"
-            class="rounded-lg border border-slate-600/50 bg-slate-800/50 px-3 py-2 text-sm text-slate-300 transition hover:border-slate-500/50 hover:text-white"
-          >{{ t.langSwitch }}</button>
-        </div>
+      <section class="mb-6">
+        <p class="mb-2 text-xs font-semibold uppercase tracking-[0.35em] text-cyan-400">EdgeOne</p>
+        <h1 class="text-3xl font-semibold tracking-tight text-white sm:text-4xl">{{ t.title }}</h1>
+        <p class="mt-3 max-w-2xl text-sm leading-6 text-slate-400">{{ t.subtitle }}</p>
       </section>
 
       <!-- Global Monitoring -->
@@ -22,36 +14,29 @@
           <div>
             <div class="text-xs font-medium uppercase tracking-[0.25em] text-cyan-400">{{ t.globalMonitoring }}</div>
             <h2 class="mt-1 text-lg font-semibold text-white">{{ t.globalMonitoringTitle }}</h2>
-            <p class="mt-2 max-w-3xl text-sm leading-6 text-slate-400">{{ t.globalMonitoringDesc }}</p>
           </div>
-          <div class="flex flex-wrap items-center gap-2">
-            <button @click="showAddDomain = true" class="inline-flex items-center gap-2 rounded-xl border border-slate-600/50 bg-slate-900/40 px-4 py-2.5 text-sm font-medium text-slate-200 transition hover:border-slate-500/50 hover:bg-slate-900/60 hover:text-white">
-              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" /></svg>
-              {{ t.addDomain }}
-            </button>
-            <button @click="refreshAllHealthChecks" :disabled="healthReportLoading" class="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-500 px-4 py-2.5 text-sm font-medium text-white transition hover:from-cyan-400 hover:to-blue-400 disabled:cursor-not-allowed disabled:opacity-60">
-              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8 8 0 004.582 9m0 0H9m11 11v-5h-.581m0 0A8.001 8.001 0 004.582 15m14.834 0H15" /></svg>
-              {{ healthReportLoading ? t.refreshing : t.triggerAllChecks }}
-            </button>
-          </div>
+          <button @click="refreshAllHealthChecks" :disabled="healthReportLoading" class="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-500 px-4 py-2.5 text-sm font-medium text-white transition hover:from-cyan-400 hover:to-blue-400 disabled:cursor-not-allowed disabled:opacity-60">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8 8 0 004.582 9m0 0H9m11 11v-5h-.581m0 0A8.001 8.001 0 004.582 15m14.834 0H15" /></svg>
+            {{ healthReportLoading ? t.refreshing : t.triggerLatencyCheck }}
+          </button>
         </div>
         <div class="grid gap-4 border-b border-slate-700/30 px-6 py-5 lg:grid-cols-2">
           <div tabindex="0" @click="copyToClipboard(globalHealthReportUrl)" @keydown.enter.prevent="copyToClipboard(globalHealthReportUrl)" @keydown.space.prevent="copyToClipboard(globalHealthReportUrl)" class="group flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-cyan-500/20 bg-cyan-500/5 px-4 py-3 transition hover:border-cyan-400/40 hover:bg-cyan-500/10">
             <div class="min-w-0">
-              <div class="text-[11px] font-medium uppercase tracking-[0.25em] text-cyan-400">{{ t.globalHealthReport }}</div>
+              <div class="text-[11px] font-medium uppercase tracking-[0.25em] text-cyan-400">{{ t.latencyReport }}</div>
               <code class="mt-1 block truncate font-mono text-sm text-cyan-300">{{ globalHealthReportUrl }}</code>
             </div>
             <span class="shrink-0 text-xs font-medium text-cyan-400 transition group-hover:text-cyan-300">{{ t.copy }}</span>
           </div>
           <div tabindex="0" @click="copyToClipboard(globalTriggerHealthCheckUrl)" @keydown.enter.prevent="copyToClipboard(globalTriggerHealthCheckUrl)" @keydown.space.prevent="copyToClipboard(globalTriggerHealthCheckUrl)" class="group flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3 transition hover:border-amber-400/40 hover:bg-amber-500/10">
             <div class="min-w-0">
-              <div class="text-[11px] font-medium uppercase tracking-[0.25em] text-amber-400">{{ t.globalTriggerChecks }}</div>
+              <div class="text-[11px] font-medium uppercase tracking-[0.25em] text-amber-400">{{ t.triggerLatencyCheck }}</div>
               <code class="mt-1 block truncate font-mono text-sm text-amber-300">{{ globalTriggerHealthCheckUrl }}</code>
             </div>
             <span class="shrink-0 text-xs font-medium text-amber-400 transition group-hover:text-amber-300">{{ t.copy }}</span>
           </div>
         </div>
-        <div class="grid gap-3 px-6 py-5 sm:grid-cols-2 xl:grid-cols-5">
+        <div class="grid gap-3 px-6 py-5 sm:grid-cols-2 xl:grid-cols-4">
           <div class="rounded-xl border border-slate-700/50 bg-slate-900/40 px-4 py-3">
             <div class="text-[11px] font-medium uppercase tracking-[0.25em] text-slate-500">{{ t.domains }}</div>
             <div class="mt-2 text-2xl font-semibold text-white">{{ healthOverview.totalDomains }}</div>
@@ -68,14 +53,25 @@
             <div class="text-[11px] font-medium uppercase tracking-[0.25em] text-rose-400">{{ t.unhealthy }}</div>
             <div class="mt-2 text-2xl font-semibold text-rose-300">{{ healthOverview.unhealthy }}</div>
           </div>
-          <div class="rounded-xl border border-slate-700/50 bg-slate-900/40 px-4 py-3 sm:col-span-2 xl:col-span-1">
-            <div class="text-[11px] font-medium uppercase tracking-[0.25em] text-amber-400">{{ t.pending }}</div>
-            <div class="mt-2 text-2xl font-semibold text-amber-300">{{ healthOverview.pending }}</div>
-          </div>
         </div>
         <div class="px-6 pb-5 text-xs text-slate-500">
           <span>{{ t.lastUpdated }}: {{ healthReportLastUpdated ? formatDateTime(healthReportLastUpdated) : t.neverRefreshed }}</span>
           <span v-if="healthReportError" class="ml-3 text-rose-300">{{ healthReportError }}</span>
+        </div>
+      </section>
+
+      <!-- Domain Action Bar -->
+      <section class="mb-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <h2 class="text-lg font-semibold text-white">{{ t.domains }}</h2>
+        <div class="flex items-center gap-3">
+          <button
+            @click="lang = lang === 'en' ? 'zh' : 'en'"
+            class="rounded-lg border border-slate-600/50 bg-slate-800/50 px-3 py-2 text-sm text-slate-300 transition hover:border-slate-500/50 hover:text-white"
+          >{{ t.langSwitch }}</button>
+          <button @click="showAddDomain = true" class="inline-flex items-center gap-2 rounded-xl border border-slate-600/50 bg-slate-900/40 px-4 py-2.5 text-sm font-medium text-slate-200 transition hover:border-slate-500/50 hover:bg-slate-900/60 hover:text-white">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" /></svg>
+            {{ t.addDomain }}
+          </button>
         </div>
       </section>
 
@@ -101,7 +97,6 @@
                 <div v-if="getDomainHealthSummary(domain).total > 0" class="mt-3 flex flex-wrap gap-2">
                   <span class="inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-medium text-emerald-300">{{ t.healthy }} {{ getDomainHealthSummary(domain).healthy }}</span>
                   <span class="inline-flex items-center rounded-full border border-rose-500/20 bg-rose-500/10 px-2.5 py-1 text-[11px] font-medium text-rose-300">{{ t.unhealthy }} {{ getDomainHealthSummary(domain).unhealthy }}</span>
-                  <span class="inline-flex items-center rounded-full border border-amber-500/20 bg-amber-500/10 px-2.5 py-1 text-[11px] font-medium text-amber-300">{{ t.pending }} {{ getDomainHealthSummary(domain).pending }}</span>
                 </div>
               </div>
               <div class="flex items-center gap-1">
@@ -330,9 +325,8 @@ const i18n = {
     addDomain: 'Add Domain',
     globalMonitoring: 'Global Monitoring',
     globalMonitoringTitle: 'Report and refresh all configured domains',
-    globalMonitoringDesc: 'Keep these URLs visible for external checks and manual refreshes. Every domain also keeps its own monitoring endpoints inside the card.',
-    globalHealthReport: 'Health Report URL',
-    globalTriggerChecks: 'Trigger All Checks',
+    latencyReport: 'Latency Report URL',
+    triggerLatencyCheck: 'Trigger Latency Check',
     lastUpdated: 'Last updated',
     neverRefreshed: 'Never refreshed',
     domains: 'Domains',
@@ -393,9 +387,8 @@ const i18n = {
     addDomain: '\u6dfb\u52a0\u57df\u540d',
     globalMonitoring: '\u5168\u5c40\u76d1\u63a7',
     globalMonitoringTitle: '\u67e5\u770b\u548c\u5237\u65b0\u6240\u6709\u57df\u540d\u7684\u5065\u5eb7\u72b6\u6001',
-    globalMonitoringDesc: '\u8fd9\u4e24\u4e2a\u5730\u5740\u7528\u4e8e\u5916\u90e8\u5b9a\u65f6\u68c0\u6d4b\u548c\u624b\u52a8\u5237\u65b0\u3002\u6bcf\u4e2a\u57df\u540d\u4e5f\u4fdd\u7559\u81ea\u5df1\u7684\u76d1\u63a7\u7aef\u70b9\u3002',
-    globalHealthReport: '\u5065\u5eb7\u62a5\u544a\u5730\u5740',
-    globalTriggerChecks: '\u89e6\u53d1\u5168\u90e8\u68c0\u67e5',
+    latencyReport: '\u5ef6\u8fdf\u62a5\u544a\u5730\u5740',
+    triggerLatencyCheck: '\u89e6\u53d1\u5ef6\u8fdf\u68c0\u67e5',
     lastUpdated: '\u6700\u540e\u66f4\u65b0',
     neverRefreshed: '\u4ece\u672a\u5237\u65b0',
     domains: '\u57df\u540d\u6570',
