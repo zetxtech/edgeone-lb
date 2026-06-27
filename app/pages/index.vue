@@ -40,7 +40,7 @@
                 <div class="flex flex-wrap items-center gap-2">
                   <span class="inline-flex items-center rounded border border-cyan-500/20 bg-cyan-500/10 px-2 py-0.5 text-xs font-medium text-cyan-400">{{ t.platform }}</span>
                   <span class="inline-flex items-center rounded border border-slate-600/30 bg-slate-700/50 px-2 py-0.5 text-xs font-medium text-slate-300">{{ rule.forceHttps ? t.forceHttps : t.httpsOptional }}</span>
-                  <span class="inline-flex items-center rounded border border-slate-600/30 bg-slate-700/50 px-2 py-0.5 text-xs font-medium text-slate-300">{{ rule.targets.length }} {{ t.targets }}</span>
+                  <span class="inline-flex items-center rounded border border-slate-600/30 bg-slate-700/50 px-2 py-0.5 text-xs font-medium text-slate-300">{{ rule.targets.length }} {{ t.backendTargets }}</span>
                 </div>
               </div>
               <div class="flex items-center gap-1">
@@ -54,9 +54,9 @@
             </div>
           </div>
 
-          <!-- Targets -->
+          <!-- Backend Targets -->
           <div class="px-6 py-4">
-            <div class="mb-3 text-xs font-medium uppercase tracking-[0.25em] text-slate-500">{{ t.targets }}</div>
+            <div class="mb-3 text-xs font-medium uppercase tracking-[0.25em] text-slate-500">{{ t.backendTargets }}</div>
             <div class="space-y-2">
               <div v-for="(target, idx) in rule.targets" :key="idx" class="group flex items-center justify-between rounded-lg bg-slate-900/50 px-3 py-2">
                 <div class="flex items-center gap-3">
@@ -75,10 +75,10 @@
             </button>
           </div>
 
-          <!-- Health Check (collapsible) -->
+          <!-- Monitoring Endpoints (collapsible) -->
           <div class="border-t border-slate-700/50">
             <button @click="toggleHealthCheck(domain)" class="flex w-full items-center justify-between px-6 py-3 text-left transition hover:bg-slate-700/20">
-              <span class="text-xs font-medium uppercase tracking-[0.25em] text-slate-500">{{ t.healthCheck }}</span>
+              <span class="text-xs font-medium uppercase tracking-[0.25em] text-slate-500">{{ t.monitoringEndpoints }}</span>
               <svg :class="['h-4 w-4 text-slate-500 transition-transform', expandedHealthChecks[domain] ? 'rotate-180' : '']" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" /></svg>
             </button>
             <div v-if="expandedHealthChecks[domain]" class="border-t border-slate-700/30 px-6 py-4">
@@ -116,25 +116,8 @@
         </div>
       </section>
 
-      <!-- Health Check Tools (collapsible) -->
-      <section class="mt-8 overflow-hidden rounded-2xl border border-slate-700/50 bg-slate-800/50 backdrop-blur-sm">
-        <button @click="healthToolsExpanded = !healthToolsExpanded" class="flex w-full items-center justify-between px-6 py-4 text-left transition hover:bg-slate-700/20">
-          <div>
-            <div class="text-xs font-medium uppercase tracking-[0.25em] text-cyan-400">{{ t.healthCheckTools }}</div>
-            <p class="mt-1 text-sm text-slate-500">{{ t.healthCheckToolsDesc }}</p>
-          </div>
-          <svg :class="['h-4 w-4 text-slate-500 transition-transform', healthToolsExpanded ? 'rotate-180' : '']" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" /></svg>
-        </button>
-        <div v-if="healthToolsExpanded" class="border-t border-slate-700/30 px-6 py-4">
-          <div tabindex="0" @click="copyToClipboard(globalTriggerHealthCheckUrl)" @keydown.enter.prevent="copyToClipboard(globalTriggerHealthCheckUrl)" @keydown.space.prevent="copyToClipboard(globalTriggerHealthCheckUrl)" class="group flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-cyan-500/20 bg-cyan-500/5 px-4 py-3 transition hover:border-cyan-400/40 hover:bg-cyan-500/10">
-            <code class="min-w-0 flex-1 truncate font-mono text-sm text-cyan-300">{{ globalTriggerHealthCheckUrl }}</code>
-            <span class="shrink-0 text-xs font-medium text-cyan-400 transition group-hover:text-cyan-300">{{ t.copy }}</span>
-          </div>
-        </div>
-      </section>
-
       <!-- Debug Logs (collapsible, at bottom) -->
-      <section class="mt-4 overflow-hidden rounded-2xl border border-slate-700/50 bg-slate-800/50 backdrop-blur-sm">
+      <section class="mt-8 overflow-hidden rounded-2xl border border-slate-700/50 bg-slate-800/50 backdrop-blur-sm">
         <button @click="debugLogsExpanded = !debugLogsExpanded" class="flex w-full items-center justify-between px-6 py-4 text-left transition hover:bg-slate-700/20">
           <div>
             <div class="text-xs font-medium uppercase tracking-[0.25em] text-fuchsia-400">{{ t.debugLogs }}</div>
@@ -273,11 +256,12 @@
 const i18n = {
   en: {
     title: 'Load Balancer Admin',
-    subtitle: 'Manage domains, backend targets, and health checks for your EdgeOne Pages load balancer.',
+    subtitle: 'Manage domain rules and backend targets for your EdgeOne Pages load balancer.',
     addDomain: 'Add Domain',
     noDomains: 'No domains configured',
     noDomainsHint: 'Get started by adding your first domain.',
     targets: 'Targets',
+    backendTargets: 'Backend Targets',
     noTargets: 'No targets configured',
     addTarget: 'Add Target',
     removeTarget: 'Remove target',
@@ -286,7 +270,7 @@ const i18n = {
     forceHttps: 'HTTPS Forced',
     httpsOptional: 'HTTPS Optional',
     platform: 'EdgeOne',
-    healthCheck: 'Health Check',
+    monitoringEndpoints: 'Monitoring Endpoints',
     cachedStatus: 'Cached Status',
     triggerRefresh: 'Trigger & Refresh',
     copy: 'Copy',
@@ -307,8 +291,6 @@ const i18n = {
     yes: 'Yes',
     no: 'No',
     fullRecord: 'Full Record',
-    healthCheckTools: 'Health Check Tools',
-    healthCheckToolsDesc: 'Trigger health checks for all configured domains.',
     cancel: 'Cancel',
     save: 'Save Changes',
     add: 'Add Domain',
@@ -324,11 +306,12 @@ const i18n = {
   },
   zh: {
     title: '\u8d1f\u8f7d\u5747\u8861\u7ba1\u7406',
-    subtitle: '\u7ba1\u7406 EdgeOne Pages \u8d1f\u8f7d\u5747\u8861\u7684\u57df\u540d\u3001\u540e\u7aef\u76ee\u6807\u548c\u5065\u5eb7\u68c0\u67e5\u3002',
+    subtitle: '\u7ba1\u7406 EdgeOne Pages \u8d1f\u8f7d\u5747\u8861\u7684\u57df\u540d\u89c4\u5219\u548c\u540e\u7aef\u76ee\u6807\u3002',
     addDomain: '\u6dfb\u52a0\u57df\u540d',
     noDomains: '\u6682\u65e0\u57df\u540d\u914d\u7f6e',
     noDomainsHint: '\u6dfb\u52a0\u4f60\u7684\u7b2c\u4e00\u4e2a\u57df\u540d\u4ee5\u5f00\u59cb\u4f7f\u7528\u3002',
     targets: '\u76ee\u6807',
+    backendTargets: '\u540e\u7aef\u76ee\u6807',
     noTargets: '\u6682\u65e0\u76ee\u6807\u914d\u7f6e',
     addTarget: '\u6dfb\u52a0\u76ee\u6807',
     removeTarget: '\u79fb\u9664\u76ee\u6807',
@@ -337,7 +320,7 @@ const i18n = {
     forceHttps: '\u5f3a\u5236 HTTPS',
     httpsOptional: 'HTTPS \u53ef\u9009',
     platform: 'EdgeOne',
-    healthCheck: '\u5065\u5eb7\u68c0\u67e5',
+    monitoringEndpoints: '\u76d1\u63a7\u7aef\u70b9',
     cachedStatus: '\u7f13\u5b58\u72b6\u6001',
     triggerRefresh: '\u89e6\u53d1\u5e76\u5237\u65b0',
     copy: '\u590d\u5236',
@@ -358,8 +341,6 @@ const i18n = {
     yes: '\u662f',
     no: '\u5426',
     fullRecord: '\u5b8c\u6574\u8bb0\u5f55',
-    healthCheckTools: '\u5065\u5eb7\u68c0\u67e5\u5de5\u5177',
-    healthCheckToolsDesc: '\u89e6\u53d1\u6240\u6709\u5df2\u914d\u7f6e\u57df\u540d\u7684\u5065\u5eb7\u68c0\u67e5\u3002',
     cancel: '\u53d6\u6d88',
     save: '\u4fdd\u5b58\u4fee\u6539',
     add: '\u6dfb\u52a0\u57df\u540d',
@@ -375,7 +356,7 @@ const i18n = {
   },
 }
 
-const lang = ref('en')
+const lang = ref('zh')
 const t = computed(() => i18n[lang.value])
 
 const rules = ref({})
@@ -389,14 +370,10 @@ const debugLogsError = ref('')
 const selectedDebugLogId = ref('')
 const selectedDebugLog = ref(null)
 const debugLogsExpanded = ref(false)
-const healthToolsExpanded = ref(false)
 const expandedHealthChecks = ref({})
 
 const domainForm = ref({ domain: '', healthPath: '/', forceHttps: true })
 const targetForm = ref({ host: '', type: 'frp' })
-
-const requestUrl = useRequestURL()
-const globalTriggerHealthCheckUrl = computed(() => new URL('/_trigger_health_check', requestUrl.origin).toString())
 
 onMounted(async () => { await loadRules() })
 
