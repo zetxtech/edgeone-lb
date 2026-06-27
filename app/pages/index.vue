@@ -468,9 +468,10 @@ const expandedHealthChecks = ref({})
 const domainForm = ref({ domain: '', healthPath: '/', forceHttps: true })
 const targetForm = ref({ host: '', type: 'frp' })
 
-const requestUrl = useRequestURL()
-const globalHealthReportUrl = computed(() => new URL('/_health', requestUrl.origin).toString())
-const globalTriggerHealthCheckUrl = computed(() => new URL('/_trigger_health_check', requestUrl.origin).toString())
+const clientOrigin = ref('')
+onMounted(() => { clientOrigin.value = window.location.origin })
+const globalHealthReportUrl = computed(() => clientOrigin.value ? `${clientOrigin.value}/_health` : '/_health')
+const globalTriggerHealthCheckUrl = computed(() => clientOrigin.value ? `${clientOrigin.value}/_trigger_health_check` : '/_trigger_health_check')
 
 const healthOverview = computed(() => {
   const totalDomains = Object.keys(rules.value || {}).length
