@@ -2,6 +2,8 @@
 
 [中文](./README_zh-CN.md)
 
+[![Deploy with EdgeOne Makers](https://cdnstatic.tencentcs.com/edgeone/pages/deploy.svg)](https://edgeone.ai/pages/new?repository-url=https%3A%2F%2Fgithub.com%2Fzetxtech%2Fedgeone-lb)
+
 A load balancer running on EdgeOne Pages, with health-aware traffic routing, KV-backed rules, and a built-in admin UI.
 
 ## Features
@@ -79,4 +81,4 @@ Requests carrying the `EdgeoneLBDebugger` request header or User-Agent substring
 
 ## License
 
-Proprietary — not distributed externally.
+[GPL-3.0](./LICENSE)
