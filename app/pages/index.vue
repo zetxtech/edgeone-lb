@@ -650,10 +650,8 @@ function getHealthStatusText(status) {
 }
 
 async function copyToClipboard(text, id) {
-  try {
-    await navigator.clipboard.writeText(text)
-    if (id) { copiedId.value = id; setTimeout(() => { copiedId.value = '' }, 2000) }
-  } catch (e) { console.error('Failed to copy:', e) }
+  if (id) { copiedId.value = id; setTimeout(() => { copiedId.value = '' }, 2000) }
+  try { await navigator.clipboard.writeText(text) } catch (e) { console.error('Failed to copy:', e) }
 }
 
 function getOutcomeBadgeClass(outcome) {
