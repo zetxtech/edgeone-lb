@@ -2,10 +2,16 @@
   <div class="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-slate-100">
     <main class="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
       <!-- Header -->
-      <section class="mb-6">
-        <p class="mb-2 text-xs font-semibold uppercase tracking-[0.35em] text-cyan-400">EdgeOne</p>
-        <h1 class="text-3xl font-semibold tracking-tight text-white sm:text-4xl">{{ t.title }}</h1>
-        <p class="mt-3 max-w-2xl text-sm leading-6 text-slate-400">{{ t.subtitle }}</p>
+      <section class="mb-6 flex items-start justify-between">
+        <div>
+          <p class="mb-2 text-xs font-semibold uppercase tracking-[0.35em] text-cyan-400">EdgeOne</p>
+          <h1 class="text-3xl font-semibold tracking-tight text-white sm:text-4xl">{{ t.title }}</h1>
+          <p class="mt-3 max-w-2xl text-sm leading-6 text-slate-400">{{ t.subtitle }}</p>
+        </div>
+        <button
+          @click="lang = lang === 'zh' ? 'en' : 'zh'"
+          class="mt-1 shrink-0 rounded-lg border border-slate-600/30 px-3 py-1.5 text-xs font-medium text-slate-400 transition hover:border-slate-500/50 hover:text-slate-200"
+        >{{ t.langSwitch }}</button>
       </section>
 
       <!-- Global Monitoring -->
@@ -21,19 +27,19 @@
           </button>
         </div>
         <div class="grid gap-4 border-b border-slate-700/30 px-6 py-5 lg:grid-cols-2">
-          <div tabindex="0" @click="copyToClipboard(globalHealthReportUrl)" @keydown.enter.prevent="copyToClipboard(globalHealthReportUrl)" @keydown.space.prevent="copyToClipboard(globalHealthReportUrl)" class="group flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-cyan-500/20 bg-cyan-500/5 px-4 py-3 transition hover:border-cyan-400/40 hover:bg-cyan-500/10">
+            <div tabindex="0" @click="copyToClipboard(globalHealthReportUrl, 'globalReport')" @keydown.enter.prevent="copyToClipboard(globalHealthReportUrl, 'globalReport')" @keydown.space.prevent="copyToClipboard(globalHealthReportUrl, 'globalReport')" class="group flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-cyan-500/20 bg-cyan-500/5 px-4 py-3 transition hover:border-cyan-400/40 hover:bg-cyan-500/10">
             <div class="min-w-0">
               <div class="text-[11px] font-medium uppercase tracking-[0.25em] text-cyan-400">{{ t.latencyReport }}</div>
               <code class="mt-1 block truncate font-mono text-sm text-cyan-300">{{ globalHealthReportUrl }}</code>
             </div>
-            <span class="shrink-0 text-xs font-medium text-cyan-400 transition group-hover:text-cyan-300">{{ t.copy }}</span>
+              <span :class="copiedId === 'globalReport' ? 'text-emerald-300' : 'text-cyan-400'" class="shrink-0 text-xs font-medium transition">{{ copiedId === 'globalReport' ? t.copied : t.copy }}</span>
           </div>
-          <div tabindex="0" @click="copyToClipboard(globalTriggerHealthCheckUrl)" @keydown.enter.prevent="copyToClipboard(globalTriggerHealthCheckUrl)" @keydown.space.prevent="copyToClipboard(globalTriggerHealthCheckUrl)" class="group flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3 transition hover:border-amber-400/40 hover:bg-amber-500/10">
+            <div tabindex="0" @click="copyToClipboard(globalTriggerHealthCheckUrl, 'globalTrigger')" @keydown.enter.prevent="copyToClipboard(globalTriggerHealthCheckUrl, 'globalTrigger')" @keydown.space.prevent="copyToClipboard(globalTriggerHealthCheckUrl, 'globalTrigger')" class="group flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3 transition hover:border-amber-400/40 hover:bg-amber-500/10">
             <div class="min-w-0">
               <div class="text-[11px] font-medium uppercase tracking-[0.25em] text-amber-400">{{ t.triggerLatencyCheck }}</div>
               <code class="mt-1 block truncate font-mono text-sm text-amber-300">{{ globalTriggerHealthCheckUrl }}</code>
             </div>
-            <span class="shrink-0 text-xs font-medium text-amber-400 transition group-hover:text-amber-300">{{ t.copy }}</span>
+              <span :class="copiedId === 'globalTrigger' ? 'text-emerald-300' : 'text-amber-400'" class="shrink-0 text-xs font-medium transition">{{ copiedId === 'globalTrigger' ? t.copied : t.copy }}</span>
           </div>
         </div>
         <div class="grid gap-3 px-6 py-5 sm:grid-cols-2 xl:grid-cols-4">
@@ -64,10 +70,6 @@
       <section class="mb-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <h2 class="text-lg font-semibold text-white">{{ t.domains }}</h2>
         <div class="flex items-center gap-3">
-          <button
-            @click="lang = lang === 'en' ? 'zh' : 'en'"
-            class="rounded-lg border border-slate-600/50 bg-slate-800/50 px-3 py-2 text-sm text-slate-300 transition hover:border-slate-500/50 hover:text-white"
-          >{{ t.langSwitch }}</button>
           <button @click="showAddDomain = true" class="inline-flex items-center gap-2 rounded-xl border border-slate-600/50 bg-slate-900/40 px-4 py-2.5 text-sm font-medium text-slate-200 transition hover:border-slate-500/50 hover:bg-slate-900/60 hover:text-white">
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" /></svg>
             {{ t.addDomain }}
@@ -150,16 +152,16 @@
               <div class="space-y-3">
                 <div>
                   <div class="mb-1 text-[11px] uppercase tracking-[0.2em] text-emerald-400">{{ t.cachedStatus }}</div>
-                  <div tabindex="0" @click="copyToClipboard('https://'+domain+'/_health')" @keydown.enter.prevent="copyToClipboard('https://'+domain+'/_health')" @keydown.space.prevent="copyToClipboard('https://'+domain+'/_health')" class="group flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 transition hover:border-emerald-400/40 hover:bg-emerald-500/10">
+                  <div tabindex="0" @click="copyToClipboard('https://'+domain+'/_health', 'health-'+domain)" @keydown.enter.prevent="copyToClipboard('https://'+domain+'/_health', 'health-'+domain)" @keydown.space.prevent="copyToClipboard('https://'+domain+'/_health', 'health-'+domain)" class="group flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 transition hover:border-emerald-400/40 hover:bg-emerald-500/10">
                     <code class="min-w-0 flex-1 truncate font-mono text-xs text-emerald-300">https://{{ domain }}/_health</code>
-                    <span class="shrink-0 text-[11px] font-medium text-emerald-400 transition group-hover:text-emerald-300">{{ t.copy }}</span>
+                    <span :class="copiedId === 'health-'+domain ? 'text-emerald-200' : 'text-emerald-400'" class="shrink-0 text-[11px] font-medium transition group-hover:text-emerald-300">{{ copiedId === 'health-'+domain ? t.copied : t.copy }}</span>
                   </div>
                 </div>
                 <div>
                   <div class="mb-1 text-[11px] uppercase tracking-[0.2em] text-cyan-400">{{ t.triggerRefresh }}</div>
-                  <div tabindex="0" @click="copyToClipboard('https://'+domain+'/_trigger_health_check')" @keydown.enter.prevent="copyToClipboard('https://'+domain+'/_trigger_health_check')" @keydown.space.prevent="copyToClipboard('https://'+domain+'/_trigger_health_check')" class="group flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-cyan-500/20 bg-cyan-500/5 px-3 py-2 transition hover:border-cyan-400/40 hover:bg-cyan-500/10">
+                  <div tabindex="0" @click="copyToClipboard('https://'+domain+'/_trigger_health_check', 'trigger-'+domain)" @keydown.enter.prevent="copyToClipboard('https://'+domain+'/_trigger_health_check', 'trigger-'+domain)" @keydown.space.prevent="copyToClipboard('https://'+domain+'/_trigger_health_check', 'trigger-'+domain)" class="group flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-cyan-500/20 bg-cyan-500/5 px-3 py-2 transition hover:border-cyan-400/40 hover:bg-cyan-500/10">
                     <code class="min-w-0 flex-1 truncate font-mono text-xs text-cyan-300">https://{{ domain }}/_trigger_health_check</code>
-                    <span class="shrink-0 text-[11px] font-medium text-cyan-400 transition group-hover:text-cyan-300">{{ t.copy }}</span>
+                    <span :class="copiedId === 'trigger-'+domain ? 'text-cyan-200' : 'text-cyan-400'" class="shrink-0 text-[11px] font-medium transition group-hover:text-cyan-300">{{ copiedId === 'trigger-'+domain ? t.copied : t.copy }}</span>
                   </div>
                 </div>
               </div>
@@ -351,6 +353,7 @@ const i18n = {
     cachedStatus: 'Cached Status',
     triggerRefresh: 'Trigger & Refresh',
     copy: 'Copy',
+    copied: 'Copied',
     debugLogs: 'Debug Logs',
     debugLogsDesc: 'Requests with a User-Agent or request header containing',
     debugLogsHint: 'will appear here after the request fully ends.',
@@ -413,6 +416,7 @@ const i18n = {
     cachedStatus: '\u7f13\u5b58\u72b6\u6001',
     triggerRefresh: '\u89e6\u53d1\u5e76\u5237\u65b0',
     copy: '\u590d\u5236',
+    copied: '\u5df2\u590d\u5236',
     debugLogs: '\u8c03\u8bd5\u65e5\u5fd7',
     debugLogsDesc: '\u5305\u542b',
     debugLogsHint: '\u7684 User-Agent \u6216\u8bf7\u6c42\u5934\u7684\u8bf7\u6c42\uff0c\u5c06\u5728\u8bf7\u6c42\u5b8c\u6210\u540e\u663e\u793a\u5728\u6b64\u5904\u3002',
@@ -448,6 +452,7 @@ const i18n = {
 const lang = ref('zh')
 const t = computed(() => i18n[lang.value])
 
+const copiedId = ref('')
 const rules = ref({})
 const healthReports = ref({})
 const healthReportLoading = ref(false)
@@ -644,7 +649,12 @@ function getHealthStatusText(status) {
   }[status] || t.value.unknown
 }
 
-async function copyToClipboard(text) { try { await navigator.clipboard.writeText(text) } catch (e) { console.error('Failed to copy:', e) } }
+async function copyToClipboard(text, id) {
+  try {
+    await navigator.clipboard.writeText(text)
+    if (id) { copiedId.value = id; setTimeout(() => { copiedId.value = '' }, 2000) }
+  } catch (e) { console.error('Failed to copy:', e) }
+}
 
 function getOutcomeBadgeClass(outcome) {
   const classes = { success: 'border border-emerald-500/30 bg-emerald-500/20 text-emerald-300', redirect: 'border border-cyan-500/30 bg-cyan-500/20 text-cyan-300', 'client-error': 'border border-amber-500/30 bg-amber-500/20 text-amber-300', 'server-error': 'border border-red-500/30 bg-red-500/20 text-red-300', unknown: 'border border-slate-500/30 bg-slate-500/20 text-slate-300' }
