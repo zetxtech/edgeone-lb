@@ -14,20 +14,21 @@ A load balancer running on EdgeOne Pages, with health-aware traffic routing, KV-
 
 ## Deployment
 
-### Prerequisites
+1. **Create a KV namespace** — Go to the EdgeOne console → Edge Functions → KV Storage and create a new namespace.
 
-- An EdgeOne Pages project
-- A KV namespace bound to the project as `lb_kv`
+2. **Bind it to your Pages project** — In the Pages project settings, add a KV binding with variable name `lb_kv` and select the namespace you just created.
 
-### Steps
+3. **Install, build, and deploy:**
 
-```bash
-npm install
-npm run build
-edgeone pages deploy
-```
+   ```bash
+   npm install
+   npm run build
+   edgeone pages deploy
+   ```
 
-After deployment, configure DNS so that your proxy domains point to the Pages project domain via CNAME. Then visit your admin domain to add rules and origin targets.
+4. **Configure DNS** — Point your proxy domains to the Pages project domain via CNAME.
+
+5. Visit your admin domain to start adding rules and origin targets.
 
 ## Configuration
 

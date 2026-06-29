@@ -14,20 +14,21 @@
 
 ## 部署
 
-### 前置条件
+1. **创建 KV 命名空间** — 进入 EdgeOne 控制台 → 边缘函数 → KV 存储，创建一个新的命名空间。
 
-- 一个 EdgeOne Pages 项目
-- 一个绑定到项目的 KV 命名空间，变量名为 `lb_kv`
+2. **绑定到 Pages 项目** — 在 Pages 项目设置中添加 KV 绑定，变量名填 `lb_kv`，选择刚创建的命名空间。
 
-### 步骤
+3. **安装、构建、部署：**
 
-```bash
-npm install
-npm run build
-edgeone pages deploy
-```
+   ```bash
+   npm install
+   npm run build
+   edgeone pages deploy
+   ```
 
-部署后，将你的代理域名通过 CNAME 指向 Pages 项目域名。然后访问管理域名，即可添加规则和源目标。
+4. **配置 DNS** — 将你的代理域名通过 CNAME 指向 Pages 项目域名。
+
+5. 访问管理域名，即可开始添加规则和源目标。
 
 ## 配置
 
