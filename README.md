@@ -1,12 +1,10 @@
 # EdgeOne Load Balancer
 
+[中文](./README_zh-CN.md)
+
 A load balancer built on EdgeOne Pages, routing traffic across multiple origin targets with health monitoring and a built-in admin panel.
 
-基于 EdgeOne Pages 构建的负载均衡器，支持多源目标流量分发、健康状态监控和内置管理面板。
-
----
-
-## Architecture / 架构
+## Architecture
 
 ```
                          ┌─────────────────────────────────────┐
@@ -33,13 +31,7 @@ A load balancer built on EdgeOne Pages, routing traffic across multiple origin t
 2. `edge-functions/__proxy/` reads rules from KV, selects an origin target via health-aware scoring, and forwards the request.
 3. Health checks run in the background on each proxy pass; results are cached in KV with a 10-minute TTL.
 
-**请求流程：**
-
-1. `middleware.js` 判断主机名 — 管理域名走 Nuxt 渲染，其他域名 rewrite 到内部代理路径。
-2. `edge-functions/__proxy/` 从 KV 读取规则，根据健康状态加权选择源目标并转发请求。
-3. 每次代理请求触发后台健康检查，结果缓存在 KV 中，TTL 为 10 分钟。
-
-## Origin Target Types / 源目标类型
+## Origin Target Types
 
 | Type | Description | Failure conditions |
 |------|-------------|-------------------|
@@ -47,7 +39,7 @@ A load balancer built on EdgeOne Pages, routing traffic across multiple origin t
 | **Tunnel** | EdgeOne Tunnel | 530/502 responses, connection timeout |
 | **Direct** | Direct origin connection | Connection timeout, non-2xx/3xx HTTP response |
 
-## Project Structure / 目录结构
+## Project Structure
 
 ```
 edgeone-lb/
@@ -75,35 +67,29 @@ edgeone-lb/
 └── tailwind.config.js
 ```
 
-## Admin UI / 管理面板
+## Admin UI
 
-The admin panel is accessible at your configured admin hostname (e.g. `elb.zetx.tech`) and provides:
-
-管理面板通过管理域名访问（如 `elb.zetx.tech`），提供以下功能：
+Accessible at your configured admin hostname (e.g. `elb.zetx.tech`):
 
 - **Global monitoring** — latency report URL and trigger-latency-check URL with one-click copy
 - **Domain management** — add, edit, delete domains; configure health check path and HTTPS redirect
 - **Origin targets** — add/remove FRP, Tunnel, or Direct targets per domain with health status and latency per target
 - **Per-domain monitoring endpoints** — collapsible, per-domain health report and trigger URLs
-- **Debug logs** — requests with `EdgeoneLBDebugger` header or User-Agent are logged and viewable in the UI
+- **Debug logs** — requests with `EdgeoneLBDebugger` header or User-Agent are logged and viewable
 - **i18n** — Chinese / English toggle
 
-## Deployment / 部署
+## Deployment
 
-### Prerequisites / 前置条件
+### Prerequisites
 
 - EdgeOne Pages project
 - KV namespace bound as `lb_kv`
 
-### Steps / 步骤
+### Steps
 
 1. Create a KV namespace in the EdgeOne console (Edge Functions → KV Storage), then bind it to your Pages project with the variable name `lb_kv`.
 
-   在 EdgeOne 控制台创建 KV 命名空间（边缘函数 → KV 存储），绑定到 Pages 项目，变量名设为 `lb_kv`。
-
-2. Install dependencies and build:
-
-   安装依赖并构建：
+2. Install and build:
 
    ```bash
    npm install
@@ -112,21 +98,15 @@ The admin panel is accessible at your configured admin hostname (e.g. `elb.zetx.
 
 3. Deploy:
 
-   部署：
-
    ```bash
    edgeone pages deploy
    ```
 
 4. Configure DNS: point your proxy domains (e.g. `elb-test.zetx.tech`) via CNAME to the Pages project domain.
 
-   配置 DNS：将代理域名（如 `elb-test.zetx.tech`）通过 CNAME 指向 Pages 项目域名。
-
 5. Access the admin panel at your admin hostname and add domains + origin targets.
 
-   通过管理域名访问管理面板，添加域名和源目标。
-
-## API Reference / 接口参考
+## API Reference
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -142,13 +122,11 @@ The admin panel is accessible at your configured admin hostname (e.g. `elb.zetx.
 | `/api/logs?id=<id>` | GET | Get a single debug log detail |
 | `/api/export` | GET | Export a snapshot of all rules |
 
-## Debug Logging / 调试日志
+## Debug Logging
 
 Requests containing the header `EdgeoneLBDebugger` or a User-Agent string that includes `EdgeoneLBDebugger` are automatically logged. Logs are retained for 7 days (max 50 entries).
 
-请求中包含 `EdgeoneLBDebugger` 请求头或 User-Agent 的，会自动记录调试日志。日志保留 7 天，最多 50 条。
-
-## Tech Stack / 技术栈
+## Tech Stack
 
 - **Runtime**: EdgeOne Pages (Edge Functions + KV)
 - **Frontend**: Nuxt 4, Vue 3, Tailwind CSS
