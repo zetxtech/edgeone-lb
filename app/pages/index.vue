@@ -44,7 +44,10 @@
         </div>
         <div class="grid gap-3 px-6 py-5 sm:grid-cols-2 xl:grid-cols-4">
           <div class="rounded-xl border border-slate-700/50 bg-slate-900/40 px-4 py-3">
-            <div class="text-[11px] font-medium uppercase tracking-[0.25em] text-slate-500">{{ t.domains }}</div>
+            <div class="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.25em] text-slate-500">
+              <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2" /></svg>
+              {{ t.lbDomains }}
+            </div>
             <div class="mt-2 text-2xl font-semibold text-white">{{ healthOverview.totalDomains }}</div>
           </div>
           <div class="rounded-xl border border-slate-700/50 bg-slate-900/40 px-4 py-3">
@@ -92,9 +95,7 @@
                   <h2 class="truncate font-mono text-lg font-semibold text-white">{{ domain }}</h2>
                 </div>
                 <div class="flex flex-wrap items-center gap-2">
-                  <span class="inline-flex items-center rounded border border-cyan-500/20 bg-cyan-500/10 px-2 py-0.5 text-xs font-medium text-cyan-400">{{ t.platform }}</span>
-                  <span class="inline-flex items-center rounded border border-slate-600/30 bg-slate-700/50 px-2 py-0.5 text-xs font-medium text-slate-300">{{ rule.forceHttps ? t.forceHttps : t.httpsOptional }}</span>
-                  <span class="inline-flex items-center rounded border border-slate-600/30 bg-slate-700/50 px-2 py-0.5 text-xs font-medium text-slate-300">{{ rule.targets.length }} {{ t.backendTargets }}</span>
+                  <span class="text-xs text-slate-500">{{ rule.targets.length }} {{ t.originTargets }}</span>
                 </div>
                 <div v-if="getDomainHealthSummary(domain).total > 0" class="mt-3 flex flex-wrap gap-2">
                   <span class="inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-medium text-emerald-300">{{ t.healthy }} {{ getDomainHealthSummary(domain).healthy }}</span>
@@ -114,7 +115,7 @@
 
           <!-- Backend Targets -->
           <div class="px-6 py-4">
-            <div class="mb-3 text-xs font-medium uppercase tracking-[0.25em] text-slate-500">{{ t.backendTargets }}</div>
+            <div class="mb-3 text-xs font-medium uppercase tracking-[0.25em] text-slate-500">{{ t.originTargets }}</div>
             <div class="space-y-2">
               <div v-for="(target, idx) in rule.targets" :key="idx" class="group flex flex-col gap-3 rounded-lg bg-slate-900/50 px-3 py-3 md:flex-row md:items-center md:justify-between">
                 <div class="flex min-w-0 items-start gap-3">
@@ -306,6 +307,9 @@
                   <button type="button" @click="targetForm.type = 'tunnel'" :class="['rounded-xl border px-4 py-3 text-sm font-medium transition-all', targetForm.type === 'tunnel' ? 'border-blue-500/50 bg-blue-500/20 text-blue-300' : 'border-slate-600/50 bg-slate-900/50 text-slate-400 hover:border-slate-500/50']">Tunnel</button>
                   <button type="button" @click="targetForm.type = 'direct'" :class="['rounded-xl border px-4 py-3 text-sm font-medium transition-all', targetForm.type === 'direct' ? 'border-emerald-500/50 bg-emerald-500/20 text-emerald-300' : 'border-slate-600/50 bg-slate-900/50 text-slate-400 hover:border-slate-500/50']">Direct</button>
                 </div>
+                <div class="mt-3 rounded-lg border border-slate-700/30 bg-slate-900/30 px-3 py-2.5">
+                  <p class="text-xs leading-relaxed text-slate-400">{{ targetTypeDesc[targetForm.type] }}</p>
+                </div>
               </div>
               <div class="flex gap-3 pt-4">
                 <button type="button" @click="showAddTarget = false" class="flex-1 rounded-xl bg-slate-700/50 px-4 py-3 text-slate-300 transition hover:bg-slate-600/50">{{ t.cancel }}</button>
@@ -323,7 +327,7 @@
 const i18n = {
   en: {
     title: 'Load Balancer Admin',
-    subtitle: 'Manage domain rules and backend targets for your EdgeOne Pages load balancer.',
+    subtitle: 'Manage domain rules and origin targets for your EdgeOne Pages load balancer.',
     addDomain: 'Add Domain',
     globalMonitoring: 'Global Monitoring',
     globalMonitoringTitle: 'Report and refresh all configured domains',
@@ -340,15 +344,13 @@ const i18n = {
     noDomains: 'No domains configured',
     noDomainsHint: 'Get started by adding your first domain.',
     targets: 'Targets',
-    backendTargets: 'Backend Targets',
+    originTargets: 'Origin Targets',
+    lbDomains: 'LB Domains',
     noTargets: 'No targets configured',
     addTarget: 'Add Target',
     removeTarget: 'Remove target',
     edit: 'Edit',
     delete: 'Delete',
-    forceHttps: 'HTTPS Forced',
-    httpsOptional: 'HTTPS Optional',
-    platform: 'EdgeOne',
     monitoringEndpoints: 'Monitoring Endpoints',
     cachedStatus: 'Cached Status',
     triggerRefresh: 'Trigger & Refresh',
@@ -379,14 +381,14 @@ const i18n = {
     healthPathHint: 'Path used for backend health checks, for example /health.',
     forceHttpsLabel: 'Force HTTPS Redirect',
     addTargetTitle: 'Add Target',
-    addTargetDesc: 'Add a backend target for',
+    addTargetDesc: 'Add an origin target for',
     host: 'Host',
     type: 'Type',
     langSwitch: '\u4e2d\u6587',
   },
   zh: {
     title: '\u8d1f\u8f7d\u5747\u8861\u7ba1\u7406',
-    subtitle: '\u7ba1\u7406 EdgeOne Pages \u8d1f\u8f7d\u5747\u8861\u7684\u57df\u540d\u89c4\u5219\u548c\u540e\u7aef\u76ee\u6807\u3002',
+    subtitle: '\u7ba1\u7406 EdgeOne Pages \u8d1f\u8f7d\u5747\u8861\u7684\u57df\u540d\u89c4\u5219\u548c\u6e90\u76ee\u6807\u3002',
     addDomain: '\u6dfb\u52a0\u57df\u540d',
     globalMonitoring: '\u5168\u5c40\u76d1\u63a7',
     globalMonitoringTitle: '\u67e5\u770b\u548c\u5237\u65b0\u6240\u6709\u57df\u540d\u7684\u5065\u5eb7\u72b6\u6001',
@@ -403,15 +405,13 @@ const i18n = {
     noDomains: '\u6682\u65e0\u57df\u540d\u914d\u7f6e',
     noDomainsHint: '\u6dfb\u52a0\u4f60\u7684\u7b2c\u4e00\u4e2a\u57df\u540d\u4ee5\u5f00\u59cb\u4f7f\u7528\u3002',
     targets: '\u76ee\u6807',
-    backendTargets: '\u540e\u7aef\u76ee\u6807',
+    originTargets: '\u6e90\u76ee\u6807',
+    lbDomains: '\u8d1f\u8f7d\u5747\u8861\u57df\u540d',
     noTargets: '\u6682\u65e0\u76ee\u6807\u914d\u7f6e',
     addTarget: '\u6dfb\u52a0\u76ee\u6807',
     removeTarget: '\u79fb\u9664\u76ee\u6807',
     edit: '\u7f16\u8f91',
     delete: '\u5220\u9664',
-    forceHttps: '\u5f3a\u5236 HTTPS',
-    httpsOptional: 'HTTPS \u53ef\u9009',
-    platform: 'EdgeOne',
     monitoringEndpoints: '\u76d1\u63a7\u7aef\u70b9',
     cachedStatus: '\u7f13\u5b58\u72b6\u6001',
     triggerRefresh: '\u89e6\u53d1\u5e76\u5237\u65b0',
@@ -442,7 +442,7 @@ const i18n = {
     healthPathHint: '\u7528\u4e8e\u540e\u7aef\u5065\u5eb7\u68c0\u67e5\u7684\u8def\u5f84\uff0c\u4f8b\u5982 /health\u3002',
     forceHttpsLabel: '\u5f3a\u5236 HTTPS \u8df3\u8f6c',
     addTargetTitle: '\u6dfb\u52a0\u76ee\u6807',
-    addTargetDesc: '\u4e3a\u4ee5\u4e0b\u57df\u540d\u6dfb\u52a0\u540e\u7aef\u76ee\u6807\uff1a',
+    addTargetDesc: '\u4e3a\u4ee5\u4e0b\u57df\u540d\u6dfb\u52a0\u6e90\u76ee\u6807\uff1a',
     host: '\u4e3b\u673a\u5730\u5740',
     type: '\u7c7b\u578b',
     langSwitch: 'EN',
@@ -472,6 +472,18 @@ const expandedHealthChecks = ref({})
 
 const domainForm = ref({ domain: '', healthPath: '/', forceHttps: true })
 const targetForm = ref({ host: '', type: 'frp' })
+
+const targetTypeDesc = computed(() => ({
+  frp: lang.value === 'zh'
+    ? 'FRP \u53cd\u5411\u4ee3\u7406\u3002SSL \u63e1\u624b\u5931\u8d25\uff08525\uff09\u3001\u8fde\u63a5\u8d85\u65f6\u6216\u8fd4\u56de FRP \u7b7e\u540d\u9519\u8bef\u9875\u65f6\u8ba4\u4e3a\u5931\u8d25\u3002'
+    : 'FRP reverse proxy. Marked failed on SSL handshake error (525), connection timeout, or FRP signature error page.',
+  tunnel: lang.value === 'zh'
+    ? 'EdgeOne Tunnel \u96a7\u9053\u3002\u8fd4\u56de 530 \u6216 502 \u65f6\u8ba4\u4e3a\u5931\u8d25\uff0c\u540c\u65f6\u4e5f\u4f1a\u68c0\u67e5\u8fde\u63a5\u8d85\u65f6\u3002'
+    : 'EdgeOne Tunnel. Marked failed on 530/502 responses or connection timeout.',
+  direct: lang.value === 'zh'
+    ? '\u76f4\u8fde\u6e90\u7ad9\u3002\u8fde\u63a5\u8d85\u65f6\u6216 HTTP \u54cd\u5e94\u975e 2xx/3xx \u65f6\u8ba4\u4e3a\u5931\u8d25\u3002'
+    : 'Direct origin connection. Marked failed on connection timeout or non-2xx/3xx HTTP response.',
+}))
 
 const clientOrigin = ref('')
 onMounted(() => { clientOrigin.value = window.location.origin })
