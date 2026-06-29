@@ -11,7 +11,7 @@ A load balancer running on EdgeOne Pages, with health-aware traffic routing, KV-
 - **Admin panel** — manage domains and origin targets through a bilingual (EN/ZH) web UI
 - **Debug logging** — opt-in request tracing via a custom header or User-Agent
 - **Zero servers** — runs entirely on EdgeOne Pages edge functions and KV storage
-
+> **Note:** Due to EdgeOne Pages limitations on outbound WebSocket connections, this project does not support WebSocket load balancing — HTTP traffic only.
 ## Deployment
 
 1. **Create a KV namespace** — Go to the EdgeOne console → Edge Functions → KV Storage and create a new namespace.

@@ -12,6 +12,8 @@
 - **调试日志** — 通过自定义请求头或 User-Agent 选择性记录请求轨迹
 - **零服务器** — 完全运行在 EdgeOne Pages 边缘函数和 KV 存储之上
 
+> **注意：** 由于 EdgeOne Pages 对出站 WebSocket 的限制，本项目不支持 WebSocket 负载均衡，仅支持 HTTP 流量。
+
 ## 部署
 
 1. **创建 KV 命名空间** — 进入 EdgeOne 控制台 → 边缘函数 → KV 存储，创建一个新的命名空间。
