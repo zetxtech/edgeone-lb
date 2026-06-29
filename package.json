@@ -1,7 +1,7 @@
 {
   "name": "admin",
   "type": "module",
-  "private": true,
+  "license": "GPL-3.0",
   "scripts": {
     "build": "nuxt build",
     "dev": "nuxt dev",
