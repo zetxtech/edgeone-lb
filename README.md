@@ -4,7 +4,7 @@
 
 [![Deploy with EdgeOne Makers](https://cdnstatic.tencentcs.com/edgeone/pages/deploy.svg)](https://edgeone.ai/pages/new?repository-url=https%3A%2F%2Fgithub.com%2Fzetxtech%2Fedgeone-lb)
 
-A load balancer running on EdgeOne Pages, with health-aware traffic routing, KV-backed rules, and a built-in admin UI.
+A load balancer running on EdgeOne Pages, with health-aware traffic routing and a built-in admin panel.
 
 ![Admin Panel](.github/screenshot.png)
 
@@ -13,9 +13,18 @@ A load balancer running on EdgeOne Pages, with health-aware traffic routing, KV-
 - **Multi-origin routing** — distribute traffic across FRP, Tunnel, or Direct targets with health-weighted selection
 - **Health monitoring** — automatic background health checks with configurable failure detection per target type
 - **Admin panel** — manage domains and origin targets through a bilingual (EN/ZH) web UI
-- **Debug logging** — opt-in request tracing via a custom header or User-Agent
-- **Zero servers** — runs entirely on EdgeOne Pages edge functions and KV storage
-> **Note:** Due to EdgeOne Pages limitations on outbound WebSocket connections, this project does not support WebSocket load balancing — HTTP traffic only.
+- **Debug logging** — optional request tracing for troubleshooting
+
+> **Note:** Due to EdgeOne Pages limitations on outbound connections, this project does not support WebSocket — HTTP traffic only.
+
+## Origin Target Types
+
+| Type | Description | Failure conditions |
+|------|-------------|-------------------|
+| **FRP** | FRP reverse proxy | SSL handshake error (525), connection timeout, FRP signature error page |
+| **Tunnel** | EdgeOne Tunnel | 530/502 responses, connection timeout |
+| **Direct** | Direct origin connection | Connection timeout, non-2xx/3xx HTTP response |
+
 ## Deployment
 
 1. **Create a KV namespace** — Go to the EdgeOne console → Edge Functions → KV Storage and create a new namespace.
@@ -34,55 +43,8 @@ A load balancer running on EdgeOne Pages, with health-aware traffic routing, KV-
 
 5. Visit your admin domain to start adding rules and origin targets.
 
-6. **Set up external monitoring** — Health checks only run when triggered by proxy requests. To keep latency data fresh, configure a service like [UptimeRobot](https://uptimerobot.com/), [Freshping](https://www.freshworks.com/website-monitoring/), or any HTTP monitor to periodically poll `/_trigger_health_check` on your admin domain (e.g. every 5 minutes). This ensures health status and latency are always up to date.
-
-## Configuration
-
-Rules are stored in KV under the `lb_kv` binding. The admin UI provides full CRUD — no manual KV editing required.
-
-Each domain rule contains:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `targets` | array | List of origin backends, each with `host`, `type` |
-| `forceHttps` | boolean | Whether to redirect HTTP to HTTPS |
-| `healthPath` | string | Path used for origin health checks (e.g. `/health`) |
-| `platform` | string | Always `"edgeone"` |
-
-## Origin Target Types
-
-| Type | Description | Failure conditions |
-|------|-------------|-------------------|
-| **FRP** | FRP reverse proxy | SSL handshake error (525), connection timeout, FRP signature error page |
-| **Tunnel** | EdgeOne Tunnel | 530/502 responses, connection timeout |
-| **Direct** | Direct origin connection | Connection timeout, non-2xx/3xx HTTP response |
-
-## API Reference
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/_health` | GET | Cached health report for all domains |
-| `/_trigger_health_check` | GET | Force re-check all targets, return updated report |
-| `/api/rules` | GET | List all domain rules |
-| `/api/rules` | POST | Create or update a domain rule |
-| `/api/rules/:domain` | GET | Get a single domain rule |
-| `/api/rules/:domain` | DELETE | Delete a domain rule |
-| `/api/rules/:domain/targets` | POST | Add an origin target |
-| `/api/rules/:domain/targets/:index` | DELETE | Remove an origin target by index |
-| `/api/logs` | GET | List recent debug log entries |
-| `/api/logs?id=<id>` | GET | Get a single debug log entry |
-| `/api/export` | GET | Export full rules snapshot |
-
-## Debug Logging
-
-Requests carrying the `EdgeoneLBDebugger` request header or User-Agent substring are automatically recorded. Logs are retained for 7 days, up to 50 entries.
-
-## Tech Stack
-
-- **Runtime** — EdgeOne Pages (Edge Functions + KV)
-- **Frontend** — Nuxt 4, Vue 3, Tailwind CSS
-- **Language** — JavaScript (ES Modules)
+6. **Set up external monitoring** — Health checks only run when triggered by proxy requests. To keep latency data fresh, configure a service like [UptimeRobot](https://uptimerobot.com/), [Freshping](https://www.freshworks.com/website-monitoring/), or any HTTP monitor to periodically poll `/_trigger_health_check` (e.g. every 5 minutes) to ensure health status is always up to date.
 
 ## License
 
-[GPL-3.0](./LICENSE)
+GNU General Public License v3.0
