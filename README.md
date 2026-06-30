@@ -27,11 +27,13 @@ A load balancer running on EdgeOne Pages, with health-aware traffic routing and 
 
 [![Deploy with EdgeOne Makers](https://cdnstatic.tencentcs.com/edgeone/pages/deploy.svg)](https://edgeone.ai/pages/new?repository-url=https%3A%2F%2Fgithub.com%2Fzetxtech%2Fedgeone-lb)
 
-Click the button above to deploy on EdgeOne Makers. After deployment:
+Click the button above to deploy on EdgeOne Makers. After deployment, complete the following:
 
-1. **Bind a KV namespace** — Add a KV binding in project settings with variable name `lb_kv`.
-2. **Configure DNS** — Point your proxy domains to the Pages project domain via CNAME.
-3. **Set up external monitoring (optional)** — Use [UptimeRobot](https://uptimerobot.com/) or similar to periodically poll `/_trigger_health_check` and keep latency data fresh.
+1. **Bind a KV namespace** — Go to the EdgeOne console → Edge Functions → KV Storage and create a namespace. Then go to Pages project settings → Environment Variables → Add KV binding, set variable name to `lb_kv` and select the namespace you just created.
+
+2. **Configure DNS** — In your domain's DNS settings, point the domains you want to load-balance (e.g. `api.example.com`) via CNAME record to the domain assigned by your Pages project.
+
+3. **Set up external monitoring** — Health checks only run when traffic passes through the load balancer; without traffic, latency data goes stale. Use free monitoring services like [UptimeRobot](https://uptimerobot.com/) or [Freshping](https://www.freshworks.com/website-monitoring/) to create an HTTP monitor targeting `/_trigger_health_check` on your admin domain, with a 5-minute interval.
 
 ## License
 

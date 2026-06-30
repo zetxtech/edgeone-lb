@@ -27,11 +27,13 @@
 
 [![Deploy with EdgeOne Makers](https://cdnstatic.tencentcs.com/edgeone/pages/deploy.svg)](https://edgeone.ai/pages/new?repository-url=https%3A%2F%2Fgithub.com%2Fzetxtech%2Fedgeone-lb)
 
-点击上方按钮，在 EdgeOne Makers 中一键部署。部署完成后需要：
+点击上方按钮，在 EdgeOne Makers 中一键部署。部署完成后还需要完成以下配置：
 
-1. **绑定 KV 命名空间** — 在项目设置中添加 KV 绑定，变量名填 `lb_kv`。
-2. **配置 DNS** — 将代理域名通过 CNAME 指向 Pages 项目域名。
-3. **配置外部监控（可选）** — 使用 [UptimeRobot](https://uptimerobot.com/) 等服务定期轮询 `/_trigger_health_check`，保持延迟数据新鲜。
+1. **绑定 KV 命名空间** — 进入 EdgeOne 控制台 → 边缘函数 → KV 存储，创建一个命名空间。然后回到 Pages 项目设置 → 环境变量 → 添加 KV 绑定，变量名填 `lb_kv`，选择刚创建的命名空间。
+
+2. **配置 DNS** — 在你的域名 DNS 设置中，将需要负载均衡的域名（如 `api.example.com`）通过 CNAME 记录指向 Pages 项目分配的域名。
+
+3. **配置外部监控** — 健康检查仅在有请求经过负载均衡时触发，如果没有流量，延迟数据会过期。使用 [UptimeRobot](https://uptimerobot.com/)、[Freshping](https://www.freshworks.com/website-monitoring/) 等免费监控服务，创建一个 HTTP 监控项，地址填入管理域名的 `/_trigger_health_check`，间隔设为 5 分钟即可。
 
 ## 许可证
 
