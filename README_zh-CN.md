@@ -4,6 +4,8 @@
 
 运行在 EdgeOne Pages 上的负载均衡器，支持基于健康状态的流量分发、KV 规则存储和内置管理面板。
 
+![管理面板](.github/screenshot.png)
+
 ## 功能
 
 - **多源站路由** — 在 FRP、Tunnel 或 Direct 目标之间按健康权重分发流量

@@ -6,6 +6,8 @@
 
 A load balancer running on EdgeOne Pages, with health-aware traffic routing, KV-backed rules, and a built-in admin UI.
 
+![Admin Panel](.github/screenshot.png)
+
 ## Features
 
 - **Multi-origin routing** — distribute traffic across FRP, Tunnel, or Direct targets with health-weighted selection
