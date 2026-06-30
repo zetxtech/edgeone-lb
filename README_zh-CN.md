@@ -34,6 +34,8 @@
 
 5. 访问管理域名，即可开始添加规则和源目标。
 
+6. **配置外部监控** — 健康检查仅在代理请求触发时运行。为保持延迟数据新鲜，可使用 [UptimeRobot](https://uptimerobot.com/)、[Freshping](https://www.freshworks.com/website-monitoring/) 等 HTTP 监控服务，定期轮询管理域名的 `/_trigger_health_check` 接口（如每 5 分钟一次），确保健康状态和延迟始终是最新的。
+
 ## 配置
 
 规则存储在 `lb_kv` 绑定的 KV 中。管理面板提供完整的增删改查功能，无需手动编辑 KV。

@@ -34,6 +34,8 @@ A load balancer running on EdgeOne Pages, with health-aware traffic routing, KV-
 
 5. Visit your admin domain to start adding rules and origin targets.
 
+6. **Set up external monitoring** — Health checks only run when triggered by proxy requests. To keep latency data fresh, configure a service like [UptimeRobot](https://uptimerobot.com/), [Freshping](https://www.freshworks.com/website-monitoring/), or any HTTP monitor to periodically poll `/_trigger_health_check` on your admin domain (e.g. every 5 minutes). This ensures health status and latency are always up to date.
+
 ## Configuration
 
 Rules are stored in KV under the `lb_kv` binding. The admin UI provides full CRUD — no manual KV editing required.
