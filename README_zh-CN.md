@@ -4,7 +4,7 @@
 
 运行在 EdgeOne Pages 上的负载均衡器，支持基于健康状态的流量分发和内置管理面板。
 
-![管理面板](.github/screenshot.png)
+![管理面板](.github/screenshot_zh.png)
 
 ## 功能
 

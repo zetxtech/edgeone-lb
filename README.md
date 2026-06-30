@@ -4,7 +4,7 @@
 
 A load balancer running on EdgeOne Pages, with health-aware traffic routing and a built-in admin panel.
 
-![Admin Panel](.github/screenshot.png)
+![Admin Panel](.github/screenshot_en.png)
 
 ## Features
 
