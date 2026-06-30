@@ -29,7 +29,7 @@
 
 点击上方按钮，在 EdgeOne Makers 中一键部署。部署完成后还需要完成以下配置：
 
-1. **绑定 KV 命名空间** — 进入 EdgeOne 控制台 → 边缘函数 → KV 存储，创建一个命名空间。然后回到 Pages 项目设置 → 环境变量 → 添加 KV 绑定，变量名填 `lb_kv`，选择刚创建的命名空间。
+1. **绑定 KV 命名空间** — 进入 EdgeOne 控制台 → Makers → 选择项目 → Storage → KV Storage，点击「Bind namespace」，变量名填 `lb_kv`，选择或创建一个 KV 命名空间。
 
 2. **配置 DNS** — 在你的域名 DNS 设置中，将需要负载均衡的域名（如 `api.example.com`）通过 CNAME 记录指向 Pages 项目分配的域名。
 

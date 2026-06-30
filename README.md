@@ -29,7 +29,7 @@ A load balancer running on EdgeOne Pages, with health-aware traffic routing and 
 
 Click the button above to deploy on EdgeOne Makers. After deployment, complete the following:
 
-1. **Bind a KV namespace** — Go to the EdgeOne console → Edge Functions → KV Storage and create a namespace. Then go to Pages project settings → Environment Variables → Add KV binding, set variable name to `lb_kv` and select the namespace you just created.
+1. **Bind a KV namespace** — Go to EdgeOne Console → Makers → select your project → Storage → KV Storage, click "Bind namespace", set variable name to `lb_kv`, and select or create a KV namespace.
 
 2. **Configure DNS** — In your domain's DNS settings, point the domains you want to load-balance (e.g. `api.example.com`) via CNAME record to the domain assigned by your Pages project.
 
