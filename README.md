@@ -1,6 +1,6 @@
 # EdgeOne Load Balancer
 
-[中文 / Chinese README](./README_zh-CN.md)
+[中文 / Chinese README](./README_zh-CN.md) · [![Deploy with EdgeOne Makers](https://cdnstatic.tencentcs.com/edgeone/pages/deploy.svg)](https://edgeone.ai/pages/new?repository-url=https%3A%2F%2Fgithub.com%2Fzetxtech%2Fedgeone-lb)
 
 A load balancer running on EdgeOne Pages, with health-aware traffic routing and a built-in admin panel.
 

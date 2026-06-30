@@ -1,6 +1,6 @@
 # EdgeOne 负载均衡器
 
-[English / 英文 README](./README.md)
+[English / 英文 README](./README.md) · [![Deploy with EdgeOne Makers](https://cdnstatic.tencentcs.com/edgeone/pages/deploy.svg)](https://edgeone.ai/pages/new?repository-url=https%3A%2F%2Fgithub.com%2Fzetxtech%2Fedgeone-lb)
 
 运行在 EdgeOne Pages 上的负载均衡器，支持基于健康状态的流量分发和内置管理面板。
 
