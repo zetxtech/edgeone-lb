@@ -1,6 +1,6 @@
 # EdgeOne 负载均衡器
 
-[English](./README.md)
+[English / 英文 README](./README.md)
 
 运行在 EdgeOne Pages 上的负载均衡器，支持基于健康状态的流量分发和内置管理面板。
 

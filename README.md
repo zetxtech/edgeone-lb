@@ -1,6 +1,6 @@
 # EdgeOne Load Balancer
 
-[中文](./README_zh-CN.md)
+[中文 / Chinese README](./README_zh-CN.md)
 
 A load balancer running on EdgeOne Pages, with health-aware traffic routing and a built-in admin panel.
 
